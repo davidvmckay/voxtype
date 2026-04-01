@@ -267,4 +267,35 @@ mod tests {
         let result = processor.process("test input").await;
         assert_eq!(result, "prefix:\ntest input");
     }
+
+    #[tokio::test]
+    async fn test_context_passed_via_env_var() {
+        // Command prints VOXTYPE_CONTEXT env var, stdin is current text
+        let config = make_config("echo \"context:$VOXTYPE_CONTEXT stdin:$(cat)\"", 5000);
+        let processor = PostProcessor::new(&config);
+        let result = processor
+            .process_with_context("current text", Some("previous text"))
+            .await;
+        assert_eq!(result, "context:previous text stdin:current text");
+    }
+
+    #[tokio::test]
+    async fn test_no_context_env_var_when_none() {
+        // VOXTYPE_CONTEXT should not be set when context is None
+        let config = make_config("echo \"context:${VOXTYPE_CONTEXT:-unset} stdin:$(cat)\"", 5000);
+        let processor = PostProcessor::new(&config);
+        let result = processor.process_with_context("current text", None).await;
+        assert_eq!(result, "context:unset stdin:current text");
+    }
+
+    #[tokio::test]
+    async fn test_context_env_not_inherited_from_parent() {
+        // Even if VOXTYPE_CONTEXT is set in parent env, it should be cleared when context is None
+        std::env::set_var("VOXTYPE_CONTEXT", "stale parent context");
+        let config = make_config("echo \"${VOXTYPE_CONTEXT:-unset}\"", 5000);
+        let processor = PostProcessor::new(&config);
+        let result = processor.process_with_context("text", None).await;
+        std::env::remove_var("VOXTYPE_CONTEXT");
+        assert_eq!(result, "unset");
+    }
 }

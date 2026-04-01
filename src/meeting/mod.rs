@@ -304,11 +304,11 @@ impl MeetingDaemon {
 
         // Post-process segment text if configured
         if let Some(ref post_processor) = self.post_processor {
-            let context = self.last_chunk_text.get(&source).map(|s| s.as_str());
+            let context = self.last_chunk_text.get(&source).cloned();
             for segment in &mut result.segments {
                 if !segment.text.is_empty() {
                     segment.text = post_processor
-                        .process_with_context(&segment.text, context)
+                        .process_with_context(&segment.text, context.as_deref())
                         .await;
                 }
             }

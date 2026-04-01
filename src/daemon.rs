@@ -1283,7 +1283,7 @@ impl Daemon {
                     // Get context from last dictation if within 60 seconds
                     let recent_context = self.last_dictation.as_ref().and_then(|(text, when)| {
                         if when.elapsed() < Duration::from_secs(60) {
-                            Some(text.as_str())
+                            Some(text.clone())
                         } else {
                             None
                         }
@@ -1298,34 +1298,40 @@ impl Daemon {
                             };
                             let profile_processor = PostProcessor::new(&profile_config);
                             tracing::info!(
-                                "Post-processing with profile: {:?}, context: {:?}",
+                                "Post-processing with profile: {:?}, has_context: {}",
                                 profile_override.as_ref().unwrap(),
-                                recent_context
+                                recent_context.is_some()
                             );
+                            tracing::debug!("Post-processing context: {:?}", recent_context);
                             let result = profile_processor
-                                .process_with_context(&processed_text, recent_context)
+                                .process_with_context(&processed_text, recent_context.as_deref())
                                 .await;
-                            tracing::info!("Post-processed: {:?}, changed: {}", result, result != processed_text);
+                            tracing::info!("Post-processed: changed: {}", result != processed_text);
+                            tracing::debug!("Post-processed result: {:?}", result);
                             result
                         } else {
                             // Profile exists but has no post_process_command, use default
                             if let Some(ref post_processor) = self.post_processor {
-                                tracing::info!("Post-processing: {:?}, context: {:?}", processed_text, recent_context);
+                                tracing::info!("Post-processing, has_context: {}", recent_context.is_some());
+                                tracing::debug!("Post-processing input: {:?}, context: {:?}", processed_text, recent_context);
                                 let result = post_processor
-                                    .process_with_context(&processed_text, recent_context)
+                                    .process_with_context(&processed_text, recent_context.as_deref())
                                     .await;
-                                tracing::info!("Post-processed: {:?}, changed: {}", result, result != processed_text);
+                                tracing::info!("Post-processed: changed: {}", result != processed_text);
+                                tracing::debug!("Post-processed result: {:?}", result);
                                 result
                             } else {
                                 processed_text
                             }
                         }
                     } else if let Some(ref post_processor) = self.post_processor {
-                        tracing::info!("Post-processing: {:?}, context: {:?}", processed_text, recent_context);
+                        tracing::info!("Post-processing, has_context: {}", recent_context.is_some());
+                        tracing::debug!("Post-processing input: {:?}, context: {:?}", processed_text, recent_context);
                         let result = post_processor
-                            .process_with_context(&processed_text, recent_context)
+                            .process_with_context(&processed_text, recent_context.as_deref())
                             .await;
-                        tracing::info!("Post-processed: {:?}, changed: {}", result, result != processed_text);
+                        tracing::info!("Post-processed: changed: {}", result != processed_text);
+                        tracing::debug!("Post-processed result: {:?}", result);
                         result
                     } else {
                         processed_text
