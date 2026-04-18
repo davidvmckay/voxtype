@@ -69,12 +69,20 @@ impl EvdevListener {
             .map(|(k, v)| Ok((parse_key_name(k)?, v.clone())))
             .collect::<Result<HashMap<Key, String>, HotkeyError>>()?;
 
-        // Warn if profile modifier keys overlap with required modifiers
+        // Warn if profile modifier keys overlap with required modifiers or model modifier
         for (key, profile_name) in &profile_modifiers {
             if modifier_keys.contains(key) {
                 tracing::warn!(
                     "Profile modifier {:?} for profile '{}' is also a required modifier — \
                      every hotkey press will activate this profile",
+                    key,
+                    profile_name
+                );
+            }
+            if model_modifier == Some(*key) {
+                tracing::warn!(
+                    "Profile modifier {:?} for profile '{}' is also the model modifier — \
+                     holding this key will activate both a model override and a profile override",
                     key,
                     profile_name
                 );
@@ -402,8 +410,9 @@ fn evdev_listener_loop(
     // Track if model modifier is currently held
     let mut model_modifier_held = false;
 
-    // Track which profile modifier keys are currently held
-    let mut held_profile_modifiers: HashMap<Key, String> = HashMap::new();
+    // Track which profile modifier keys are currently held and the most recently pressed profile
+    let mut held_profile_modifiers: HashSet<Key> = HashSet::new();
+    let mut last_pressed_profile: Option<String> = None;
 
     // Track if we're currently "pressed" (to handle repeat events)
     let mut is_pressed = false;
@@ -451,6 +460,7 @@ fn evdev_listener_loop(
             active_modifiers.clear();
             model_modifier_held = false;
             held_profile_modifiers.clear();
+            last_pressed_profile = None;
             is_pressed = false;
             manager.handle_device_changes();
         }
@@ -462,6 +472,7 @@ fn evdev_listener_loop(
                 active_modifiers.clear();
                 model_modifier_held = false;
                 held_profile_modifiers.clear();
+                last_pressed_profile = None;
                 is_pressed = false;
                 tracing::debug!("Stale devices removed during validation");
             }
@@ -508,10 +519,14 @@ fn evdev_listener_loop(
             if let Some(profile_name) = profile_modifiers.get(&key) {
                 match value {
                     1 => {
-                        held_profile_modifiers.insert(key, profile_name.clone());
+                        held_profile_modifiers.insert(key);
+                        last_pressed_profile = Some(profile_name.clone());
                     }
                     0 => {
                         held_profile_modifiers.remove(&key);
+                        if held_profile_modifiers.is_empty() {
+                            last_pressed_profile = None;
+                        }
                     }
                     _ => {}
                 }
@@ -548,8 +563,8 @@ fn evdev_listener_loop(
                             };
 
                             // Determine profile override from held profile modifier keys
-                            // If multiple are held, pick the most recently inserted (last value)
-                            let profile_override = held_profile_modifiers.values().last().cloned();
+                            // If multiple are held, the most recently pressed wins
+                            let profile_override = last_pressed_profile.clone();
 
                             if model_override.is_some() || profile_override.is_some() {
                                 tracing::debug!(
