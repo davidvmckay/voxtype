@@ -1,10 +1,6 @@
-# Parakeet Backend (Experimental)
+# Parakeet Backend
 
-> **WARNING: Experimental Feature**
->
-> Parakeet support is experimental and not yet fully integrated into voxtype's setup system. Configuration requires manual editing of config files. The API and configuration options may change in future releases. Use at your own risk.
-
-Voxtype 0.5.0+ includes experimental support for NVIDIA's Parakeet ASR models as an alternative to Whisper. Parakeet uses ONNX Runtime and offers excellent CPU performance without requiring a GPU.
+Voxtype supports NVIDIA's Parakeet ASR models as an alternative to Whisper. Parakeet uses ONNX Runtime and offers excellent CPU performance without requiring a GPU.
 
 ## What is Parakeet?
 
@@ -17,19 +13,19 @@ Parakeet is NVIDIA's FastConformer-based speech recognition model. The TDT (Toke
 
 ## Requirements
 
-- A Parakeet-enabled voxtype binary (see below)
+- An ONNX-enabled voxtype binary (see below)
 - ~600MB disk space for the model
 - CPU with AVX2 or AVX-512 (AVX-512 recommended for best performance)
 
 ## Getting a Parakeet Binary
 
-Parakeet support requires a specially compiled binary. Download from the releases page:
+Parakeet support requires an ONNX-enabled binary. Download from the releases page:
 
 | Binary | Use Case |
 |--------|----------|
-| `voxtype-*-parakeet-avx2` | Most CPUs (Intel Haswell+, AMD Zen+) |
-| `voxtype-*-parakeet-avx512` | Modern CPUs with AVX-512 (Intel Ice Lake+, AMD Zen 4+) |
-| `voxtype-*-parakeet-cuda` | NVIDIA GPU acceleration with CPU fallback |
+| `voxtype-*-onnx-avx2` | Most CPUs (Intel Haswell+, AMD Zen+) |
+| `voxtype-*-onnx-avx512` | Modern CPUs with AVX-512 (Intel Ice Lake+, AMD Zen 4+) |
+| `voxtype-*-onnx-cuda` | NVIDIA GPU acceleration with CPU fallback |
 
 The AVX2 binary works on most modern x86_64 CPUs. Use AVX-512 if your CPU supports it for better performance.
 
@@ -43,37 +39,39 @@ mkdir -p ~/.local/share/voxtype/models
 
 # Download and extract the model
 cd ~/.local/share/voxtype/models
-curl -L https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2/resolve/main/onnx/encoder-model.onnx -o encoder-model.onnx
-curl -L https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2/resolve/main/onnx/encoder-model.onnx.data -o encoder-model.onnx.data
-curl -L https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2/resolve/main/onnx/decoder_joint-model.onnx -o decoder_joint-model.onnx
+curl -L https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/main/encoder-model.onnx -o encoder-model.onnx
+curl -L https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/main/encoder-model.onnx.data -o encoder-model.onnx.data
+curl -L https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/main/decoder_joint-model.onnx -o decoder_joint-model.onnx
+curl -L https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/main/vocab.txt -o vocab.txt
+curl -L https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/main/config.json -o config.json
 
 # Or download the full directory structure
 # The model should be at: ~/.local/share/voxtype/models/parakeet-tdt-0.6b-v2/
 ```
 
-Alternatively, use a v3 model if available:
+Alternatively, use the v3 model (https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx):
 
 ```bash
 mkdir -p ~/.local/share/voxtype/models/parakeet-tdt-0.6b-v3
 cd ~/.local/share/voxtype/models/parakeet-tdt-0.6b-v3
-# Download encoder-model.onnx, encoder-model.onnx.data, decoder_joint-model.onnx
+# Download encoder-model.onnx, encoder-model.onnx.data, decoder_joint-model.onnx, vocab.txt, config.json
 ```
 
 ## Switching to a Parakeet Binary
 
-The standard voxtype binary does not include Parakeet support. You must switch to a Parakeet-enabled binary.
+The standard voxtype binary does not include Parakeet support. You must switch to an ONNX-enabled binary.
 
 **Manual switching (until `voxtype setup engine` is implemented):**
 
 ```bash
 # Download the Parakeet binary for your CPU
 # Example: AVX-512 capable CPU
-curl -L https://github.com/peteonrails/voxtype/releases/download/v0.5.0/voxtype-0.5.0-linux-x86_64-parakeet-avx512 \
-  -o /tmp/voxtype-parakeet
+curl -L https://github.com/peteonrails/voxtype/releases/download/v0.6.3/voxtype-0.6.3-linux-x86_64-onnx-avx512 \
+  -o /tmp/voxtype-onnx
 
 # Make executable and install
-chmod +x /tmp/voxtype-parakeet
-sudo mv /tmp/voxtype-parakeet /usr/local/bin/voxtype
+chmod +x /tmp/voxtype-onnx
+sudo mv /tmp/voxtype-onnx /usr/local/bin/voxtype
 
 # Restart the daemon
 systemctl --user restart voxtype
@@ -173,7 +171,7 @@ Or simply remove the `engine` line (Whisper is the default).
 
 ### "Parakeet engine requested but voxtype was not compiled with --features parakeet"
 
-You're using a standard voxtype binary without Parakeet support. Download a `parakeet-*` binary from the releases page.
+You're using a standard voxtype binary without Parakeet support. Download an `onnx-*` binary from the releases page.
 
 ### "Parakeet engine selected but [parakeet] config section is missing"
 
@@ -190,7 +188,7 @@ Ensure the model is in the correct location:
 
 ```bash
 ls ~/.local/share/voxtype/models/parakeet-tdt-0.6b-v3/
-# Should show: encoder-model.onnx, encoder-model.onnx.data, decoder_joint-model.onnx
+# Should show: encoder-model.onnx, encoder-model.onnx.data, decoder_joint-model.onnx, vocab.txt, config.json
 ```
 
 ### SIGILL crash on older CPUs
@@ -209,7 +207,7 @@ Please report the issue at https://github.com/peteonrails/voxtype/issues with:
 
 ## Feedback
 
-Parakeet support is experimental. Please report issues at:
+Please report issues at:
 https://github.com/peteonrails/voxtype/issues
 
 Include:

@@ -9,16 +9,16 @@
     <!-- Open Graph / Social Media -->
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://voxtype.io/news/">
-    <meta property="og:title" content="Voxtype 0.5.6: Moonshine Backend, Voice Activity Detection, Eager Transcription">
-    <meta property="og:description" content="Moonshine transcription backend for fast CPU inference. Voice activity detection filters silence and prevents hallucinations. Eager input processing reduces perceived latency.">
+    <meta property="og:title" content="Voxtype 0.6.4: Clang 22 Compatibility, Smart Auto-Submit, CUDA Safety">
+    <meta property="og:description" content="Fixes AUR source builds on clang 22, adds auto-submit by voice trigger, and probes CUDA version before loading to prevent segfaults.">
     <meta property="og:image" content="https://voxtype.io/images/gpu-isolation.png">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
 
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="Voxtype 0.5.6: Moonshine Backend, Voice Activity Detection, Eager Transcription">
-    <meta name="twitter:description" content="Moonshine transcription backend for fast CPU inference. Voice activity detection filters silence and prevents hallucinations. Eager input processing reduces perceived latency.">
+    <meta name="twitter:title" content="Voxtype 0.6.4: Clang 22 Compatibility, Smart Auto-Submit, CUDA Safety">
+    <meta name="twitter:description" content="Fixes AUR source builds on clang 22, adds auto-submit by voice trigger, and probes CUDA version before loading to prevent segfaults.">
     <meta name="twitter:image" content="https://voxtype.io/images/gpu-isolation.png">
 
     <title>News & Updates | Voxtype</title>
@@ -74,6 +74,377 @@
     <!-- News Articles -->
     <main class="news-content">
         <div class="container">
+
+            <!-- v0.6.x Era Posts -->
+
+            <article class="news-article" id="v065">
+                <div class="article-meta">
+                    <time datetime="2026-03-31">March 31, 2026</time>
+                    <span class="article-tag">Release</span>
+                </div>
+                <h2>v0.6.5: Eager Processing, Multi-GPU Device Selection, Parakeet TDT English-Only Models</h2>
+                <div class="article-body">
+                    <p>Voxtype 0.6.5 adds real-time transcription during recording, fixes a performance regression on multi-GPU systems, and brings new English-only Parakeet models. If you have both an integrated and discrete GPU, the <code>gpu_device</code> option gives you direct control over which one runs inference.</p>
+
+                    <h3>Eager Processing</h3>
+                    <p>Voxtype can now transcribe audio chunks while you are still recording. Instead of waiting until you release the hotkey and then processing all the audio at once, eager mode splits your recording into overlapping chunks and transcribes them in parallel. When you stop recording, the partial results are combined into the final output.</p>
+
+                    <p><strong>Why use it:</strong> On slower CPUs where transcription takes several seconds, eager processing reduces the wait after you stop speaking. On fast systems with GPU acceleration, the difference is negligible.</p>
+
+                    <div class="code-block">
+                        <div class="code-header"><span>config.toml</span></div>
+                        <pre><code>[whisper]
+eager_processing = true
+eager_chunk_secs = 5.0       # Chunk size (seconds)
+eager_overlap_secs = 0.5     # Overlap to avoid losing words at boundaries</code></pre>
+                    </div>
+
+                    <p>Per-recording overrides work too: <code>voxtype --eager-processing record start</code></p>
+
+                    <h3>Multi-GPU Device Selection</h3>
+                    <p>whisper-rs 0.16.0 began enumerating integrated GPUs via Vulkan, which gave them priority over discrete GPUs. On systems with both (common on laptops and hybrid desktops), this caused transcription to run on the integrated GPU at roughly 3x slower speeds with no obvious indication.</p>
+
+                    <p>The new <code>gpu_device</code> option lets you specify the exact GPU device index for whisper.cpp:</p>
+
+                    <div class="code-block">
+                        <div class="code-header"><span>config.toml</span></div>
+                        <pre><code>[whisper]
+gpu_device = 1    # Use device index 1 (your discrete GPU)</code></pre>
+                    </div>
+
+                    <p>Also available as <code>--gpu-device 1</code> on the CLI or <code>VOXTYPE_GPU_DEVICE=1</code> as an environment variable. Use <code>voxtype setup gpu</code> or <code>vulkaninfo --summary</code> to find your device indices.</p>
+
+                    <p>This complements the existing <code>VOXTYPE_VULKAN_DEVICE</code> env var, which filters by vendor name ("amd", "nvidia", "intel"). Use <code>gpu_device</code> when you need precise index control, especially with same-vendor multi-GPU setups.</p>
+
+                    <h3>Parakeet TDT English-Only Models</h3>
+                    <p>Two new Parakeet model options for English-only transcription:</p>
+                    <ul>
+                        <li><strong>parakeet-tdt-0.6b-v2</strong> (2.4 GB): Full-precision TDT model with best English accuracy</li>
+                        <li><strong>parakeet-tdt-0.6b-v2-int8</strong> (640 MB): Quantized variant, about 20% faster and 75% smaller at the cost of minor accuracy</li>
+                    </ul>
+                    <p>Select them via <code>voxtype setup model</code>. These are alternatives to the existing v3 models, which have better punctuation but are multilingual.</p>
+
+                    <h3>Contributors</h3>
+                    <p>Thanks to <a href="https://github.com/sjawhar">Sami Jawhar</a> for wiring eager processing into the daemon, <a href="https://github.com/rinormaloku">Rinor Maloku</a> for the Parakeet TDT English-only model definitions, and <a href="https://github.com/DuskyElf">jan Lemata (DuskyElf)</a> for the multi-GPU device selection.</p>
+                </div>
+            </article>
+
+            <article class="news-article" id="v064">
+                <div class="article-meta">
+                    <time datetime="2026-03-19">March 19, 2026</time>
+                    <span class="article-tag">Release</span>
+                </div>
+                <h2>v0.6.4: Clang 22 Compatibility, Smart Auto-Submit, CUDA Safety</h2>
+                <div class="article-body">
+                    <p>Voxtype 0.6.4 fixes source builds on systems with clang 22, adds voice-triggered auto-submit, and prevents CUDA version mismatch segfaults. If you build voxtype from source on Arch Linux and recently updated clang, this release unblocks you.</p>
+
+                    <h3>Clang 22 / Bindgen Compatibility</h3>
+                    <p>LLVM 22 changed how it represents certain C struct types in the AST, which broke bindgen 0.71.x during the whisper-rs build. The build would fail with type errors in the generated FFI bindings. This release bumps whisper-rs to 0.16.0, which includes bindgen 0.72.1 with the fix.</p>
+
+                    <p><strong>Why it matters:</strong> Arch Linux and other rolling distros ship clang 22 now. Without this fix, <code>makepkg</code> for the <code>voxtype</code> AUR package fails during compilation.</p>
+
+                    <h3>Smart Auto-Submit</h3>
+                    <p>You can now say "submit", "send", or "enter" at the end of your dictation to automatically press Enter after the text is output. This is useful for chat apps, terminal prompts, and search boxes where you want to dictate and send in one step.</p>
+
+                    <p><strong>Why use it:</strong> Dictate a Slack message and say "send" at the end. The text is typed and Enter is pressed, all from a single recording.</p>
+
+                    <div class="code-block">
+                        <div class="code-header"><span>config.toml</span></div>
+                        <pre><code>[text]
+smart_auto_submit = true</code></pre>
+                    </div>
+
+                    <p>The trigger word is stripped from the output. Works with <code>--auto-submit</code> per-recording overrides too. Trigger words are case-insensitive and must appear as the last word in the transcription.</p>
+
+                    <h3>CUDA Version Probing</h3>
+                    <p>ONNX engine binaries ship with CUDA 12.x bundled. If your system has an older CUDA version (or none at all), the previous behavior was a segfault deep inside ONNX Runtime initialization. Voxtype now probes the system CUDA version via <code>dlopen</code>/<code>dlsym</code> before attempting to load ONNX Runtime with CUDA. If the version doesn't match, it falls back to CPU with a clear warning instead of crashing.</p>
+
+                    <p><strong>Why it matters:</strong> Users with NVIDIA GPUs but older CUDA drivers no longer get unexplained crashes when selecting an ONNX engine.</p>
+
+                    <h3>Bug Fixes</h3>
+                    <ul>
+                        <li><strong>Status command ONNX detection:</strong> <code>voxtype status</code> now correctly reports the model name and backend when using ONNX engines (Parakeet, SenseVoice, etc.) instead of showing the Whisper model path.</li>
+                        <li><strong>Meeting export directory handling:</strong> When <code>--output</code> points to a directory instead of a file, voxtype now auto-generates a timestamped filename instead of failing.</li>
+                    </ul>
+
+                    <h3>Other Changes</h3>
+                    <ul>
+                        <li>NixOS Home Manager module now merges user settings into defaults instead of replacing them.</li>
+                        <li>Updated Parakeet model documentation with correct download links and file listings.</li>
+                    </ul>
+
+                    <h3>Contributors</h3>
+                    <p>Thanks to <a href="https://github.com/siebertm">Michael Siebert</a> for smart auto-submit, <a href="https://github.com/materemias">materemias</a> for meeting export improvements, <a href="https://github.com/repomaa">Joakim Repomaa</a> for the NixOS HM fix, <a href="https://github.com/benj9000">benj9000</a> for Parakeet documentation updates, and <a href="https://github.com/fazzledev">Syed Fazil Basheer</a> for diagnosing the ONNX status bug.</p>
+                </div>
+            </article>
+
+            <article class="news-article" id="v063">
+                <div class="article-meta">
+                    <time datetime="2026-02-25">February 25, 2026</time>
+                    <span class="article-tag">Release</span>
+                </div>
+                <h2>v0.6.3: Clipboard Restoration, Full Config Override, NixOS Improvements</h2>
+                <div class="article-body">
+                    <p>Voxtype 0.6.3 restores your clipboard after paste mode output, closes the config override gap so every option is configurable via CLI flags and environment variables, and includes several NixOS packaging improvements.</p>
+
+                    <h3>Clipboard Restoration</h3>
+                    <p>When using paste mode, voxtype copies transcribed text to the clipboard and simulates Ctrl+V. Previously, this replaced whatever you had on your clipboard. Now voxtype can save your clipboard contents before pasting and restore them afterward.</p>
+
+                    <p><strong>Why use it:</strong> You can dictate text without losing the link, code snippet, or image you copied earlier.</p>
+
+                    <p>Supports both Wayland (wl-paste/wl-copy) and X11 (xclip), preserving binary content and MIME types on Wayland. A 100 MB size cap prevents memory issues with large clipboard contents.</p>
+
+                    <div class="code-block">
+                        <div class="code-header"><span>config.toml</span></div>
+                        <pre><code>[output]
+mode = "paste"
+restore_clipboard = true
+restore_clipboard_delay_ms = 200</code></pre>
+                    </div>
+
+                    <p>The delay gives applications time to process the paste before the clipboard is restored. The default 200ms works well for most apps including Electron-based editors.</p>
+
+                    <h3>Every Option Configurable Everywhere</h3>
+                    <p>Project principle #5 says every option should be configurable via CLI flag, environment variable, or config file. This release closes that gap. The daemon now accepts 30+ CLI flags organized by section (Hotkey, Whisper, Audio, Output, VAD), and every config option has a corresponding <code>VOXTYPE_*</code> environment variable.</p>
+
+                    <div class="code-block">
+                        <div class="code-header"><span>CLI flags (examples)</span></div>
+                        <pre><code># Override model and language via CLI
+voxtype --model large-v3 --language en daemon
+
+# Override via environment variables
+VOXTYPE_MODEL=large-v3 VOXTYPE_LANGUAGE=en voxtype daemon</code></pre>
+                    </div>
+
+                    <p>The <code>record start</code> and <code>record toggle</code> commands also gained per-recording overrides for <code>--auto-submit</code> and <code>--shift-enter-newlines</code>, so compositor keybindings can toggle these per-dictation.</p>
+
+                    <div class="code-block">
+                        <div class="code-header"><span>Hyprland example</span></div>
+                        <pre><code># Normal dictation
+bind = , F8, exec, voxtype record toggle
+
+# Dictation that presses Enter after output
+bind = SHIFT, F8, exec, voxtype record toggle --auto-submit</code></pre>
+                    </div>
+
+                    <h3>NixOS Packaging</h3>
+                    <p>Several improvements for NixOS users:</p>
+                    <ul>
+                        <li>ONNX packages now include all six engines (Parakeet, Moonshine, SenseVoice, Paraformer, Dolphin, Omnilingual) instead of just Parakeet. The <code>parakeet</code> package names still work as aliases.</li>
+                        <li>flake.nix derives version from Cargo.toml instead of a hard-coded string, so <code>voxtype --version</code> stays in sync.</li>
+                        <li>dotool added to Nix runtime dependencies.</li>
+                        <li>LIBCLANG_PATH set correctly for the devshell.</li>
+                    </ul>
+
+                    <h3>Bug Fixes</h3>
+                    <ul>
+                        <li><strong>Post-process EPIPE errors:</strong> Commands that don't read stdin (like <code>echo</code> or <code>head -1</code>) could exit before voxtype finished writing to the pipe, causing a spurious fallback to the original text. The command's exit code and stdout now determine success, not whether it consumed all of stdin. This also fixed a deterministic test failure on aarch64 that was blocking NixOS packaging.</li>
+                    </ul>
+
+                    <h3>Contributors</h3>
+                    <p>Thanks to <a href="https://github.com/grota">grota</a> for clipboard restoration, <a href="https://github.com/digunix">digunix</a> for the flake.nix version fix, <a href="https://github.com/ekisu">ekisu</a> for dotool in Nix deps, and <a href="https://github.com/DuskyElf">DuskyElf</a> for the devshell LIBCLANG_PATH fix and NixOS packaging co-ownership.</p>
+                </div>
+            </article>
+
+            <article class="news-article" id="v062">
+                <div class="article-meta">
+                    <time datetime="2026-02-17">February 17, 2026</time>
+                    <span class="article-tag">Release</span>
+                </div>
+                <h2>v0.6.2: Echo Cancellation and Meeting Bug Fixes</h2>
+                <div class="article-body">
+                    <p>Voxtype 0.6.2 adds neural echo cancellation for meeting mode, rewrites loopback audio capture, and fixes three meeting bugs. If you use meeting mode with loopback enabled, remote participants' audio no longer bleeds into your mic transcript.</p>
+
+                    <h3>GTCRN Echo Cancellation</h3>
+                    <p>When meeting mode captures both your microphone and system audio (for remote participant transcription), the remote audio bleeds through your speakers into your mic. Previous approaches using signal subtraction and energy gating didn't work because the mic and loopback streams aren't sample-aligned.</p>
+
+                    <p>This release uses GTCRN (Group Temporal Convolutional Recurrent Network), a 48K-parameter speech enhancement model that processes mic audio frame-by-frame through STFT. It removes background noise and speaker bleed-through while preserving your voice. The model is 523 KB and runs at about 0.02x real-time on CPU, so processing 30 seconds of audio takes under 0.6 seconds.</p>
+
+                    <p><strong>Why use it:</strong> If you're in a video call and the other person's voice is showing up in your "You" segments, this fixes it. It's enabled by default when loopback capture is active.</p>
+
+                    <p>The GTCRN model downloads automatically the first time you start a meeting. To disable it (if you already have system-level echo cancellation via PipeWire):</p>
+
+                    <div class="code-block">
+                        <div class="code-header"><span>config.toml</span></div>
+                        <pre><code>[meeting.audio]
+echo_cancel = "disabled"</code></pre>
+                    </div>
+
+                    <h3>Dual Audio Capture via parec</h3>
+                    <p>Loopback capture has been rewritten to use <code>parec</code> (PulseAudio recording client) instead of cpal. PipeWire's monitor sources aren't visible through ALSA, which is what cpal uses. The <code>parec</code> approach works with both PipeWire and PulseAudio and can access any monitor source listed by <code>pactl list short sources</code>.</p>
+
+                    <p>Mic and loopback audio now go into separate buffers, so they're transcribed independently. Mic chunks pass through GTCRN before transcription. A phrase-level dedup pass strips any residual echoed words that survive enhancement.</p>
+
+                    <h3>Bug Fixes</h3>
+                    <ul>
+                        <li><strong>Meeting stop/pause/resume not working:</strong> The daemon's event loop starved the meeting control channel when audio processing was active. Meeting commands now take priority.</li>
+                        <li><strong>Orphaned meetings on daemon restart:</strong> If the daemon crashed during a meeting, the meeting state file was never cleaned up, preventing new meetings from starting. The daemon now cleans up stale meeting state on startup.</li>
+                        <li><strong>ml-diarization compilation errors:</strong> Fixed type mismatches after the ort 2.0.0-rc.11 API change.</li>
+                    </ul>
+                </div>
+            </article>
+
+            <article class="news-article" id="v060">
+                <div class="article-meta">
+                    <time datetime="2026-02-16">February 16, 2026</time>
+                    <span class="article-tag">Release</span>
+                </div>
+                <h2>v0.6.0: Five New Transcription Engines, Meeting Mode</h2>
+                <div class="article-body">
+                    <p>Voxtype 0.6.0 is a major release. Five new ONNX-based transcription engines bring support for Chinese, Japanese, Korean, Cantonese, and 1600+ additional languages. Meeting mode adds continuous transcription for meetings with speaker attribution, export to multiple formats, and AI-generated summaries. The ONNX binary variants now ship with every ONNX engine included.</p>
+
+                    <h3>Five New Transcription Engines</h3>
+                    <p>Voxtype previously offered two transcription engines: Whisper and Parakeet. This release adds five more, all running locally via ONNX Runtime. Each engine has different strengths and language coverage.</p>
+
+                    <table class="performance-table">
+                        <thead>
+                            <tr>
+                                <th>Engine</th>
+                                <th>Languages</th>
+                                <th>Best For</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>SenseVoice</td>
+                                <td>Chinese, English, Japanese, Korean, Cantonese</td>
+                                <td>CJK transcription with auto-detection</td>
+                            </tr>
+                            <tr>
+                                <td>Paraformer</td>
+                                <td>Chinese + English (bilingual), Chinese + Cantonese + English (trilingual)</td>
+                                <td>Mixed Chinese/English speech</td>
+                            </tr>
+                            <tr>
+                                <td>Dolphin</td>
+                                <td>40 languages + 22 Chinese dialects</td>
+                                <td>Chinese dialects and Eastern languages</td>
+                            </tr>
+                            <tr>
+                                <td>Omnilingual</td>
+                                <td>1600+ languages</td>
+                                <td>Low-resource and rare languages</td>
+                            </tr>
+                            <tr>
+                                <td>Moonshine</td>
+                                <td>English (+ Japanese, Mandarin, Korean, Arabic)</td>
+                                <td>Fast CPU inference</td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <p><strong>Why use them:</strong> If you speak a CJK language and want a model trained specifically for it, SenseVoice and Paraformer will outperform Whisper on that task. If you need a rare language that Whisper doesn't cover well, Omnilingual supports over 1600 languages via Meta's MMS model. Dolphin covers 40 languages plus 22 Chinese dialects, which is useful if your dialect isn't well-served by general-purpose models.</p>
+
+                    <p>All five engines are CTC-based, meaning they run in a single forward pass with no autoregressive decoder loop. In practice, this makes them fast on CPU.</p>
+
+                    <div class="code-block">
+                        <div class="code-header"><span>config.toml</span></div>
+                        <pre><code># SenseVoice for CJK + English
+engine = "sensevoice"
+
+[sensevoice]
+model = "SenseVoiceSmall"
+language = "auto"    # auto, zh, en, ja, ko, yue
+
+# Paraformer for bilingual Chinese/English
+engine = "paraformer"
+
+[paraformer]
+model = "paraformer-zh"
+
+# Omnilingual for 1600+ languages
+engine = "omnilingual"
+
+[omnilingual]
+model = "mms-1b-all"</code></pre>
+                    </div>
+
+                    <p>Download models with <code>voxtype setup model</code> and select from the interactive menu. The new engines share infrastructure with Parakeet and Moonshine: shared Fbank feature extraction, shared CTC decoding, and shared ONNX Runtime session management.</p>
+
+                    <h3>All ONNX Engines in Every ONNX Binary</h3>
+                    <p>Previously, the ONNX release binaries only included Parakeet. Starting with v0.6.0, all four ONNX binary variants (onnx-avx2, onnx-avx512, onnx-cuda, onnx-rocm) include every ONNX engine: Parakeet, Moonshine, SenseVoice, Paraformer, Dolphin, and Omnilingual. The three Whisper-only binaries (avx2, avx512, vulkan) remain Whisper-only. Switch engines by changing a single config line.</p>
+
+                    <p>The release binary naming also changed from <code>voxtype-*-parakeet-*</code> to <code>voxtype-*-onnx-*</code> to reflect this broader scope.</p>
+
+                    <h3>Meeting Mode</h3>
+                    <p>Meeting mode is a new way to use Voxtype: continuous transcription for meetings, calls, and lectures. Instead of push-to-talk, it records continuously in chunks and transcribes each chunk as it completes.</p>
+
+                    <div class="code-block">
+                        <pre><code># Start a meeting
+voxtype meeting start --title "Weekly standup"
+
+# Pause and resume
+voxtype meeting pause
+voxtype meeting resume
+
+# Stop when done
+voxtype meeting stop
+
+# Export the transcript
+voxtype meeting export latest --format markdown
+voxtype meeting export latest --format srt</code></pre>
+                    </div>
+
+                    <p><strong>Why use it:</strong> Push-to-talk is great for dictation, but meetings need continuous recording. Meeting mode handles that with automatic chunking (default 30-second chunks), so memory usage stays bounded even for long sessions up to 3 hours.</p>
+
+                    <h3>Speaker Attribution</h3>
+                    <p>Meeting mode can identify who is speaking. Two approaches are available:</p>
+
+                    <ul>
+                        <li><strong>Simple attribution:</strong> Uses dual audio capture (microphone + system loopback) to label segments as "You" or "Remote". Good for 1-on-1 calls where you just need to distinguish yourself from the other person.</li>
+                        <li><strong>ML diarization:</strong> Uses ONNX-based speaker embeddings to cluster speech by speaker and assign labels like SPEAKER_00, SPEAKER_01. Works for multi-person meetings. You can rename speakers after the fact with <code>voxtype meeting label</code>.</li>
+                    </ul>
+
+                    <div class="code-block">
+                        <pre><code># Label auto-generated speaker IDs with real names
+voxtype meeting label latest SPEAKER_00 "Alice"
+voxtype meeting label latest SPEAKER_01 "Bob"</code></pre>
+                    </div>
+
+                    <h3>Meeting Export Formats</h3>
+                    <p>Meeting transcripts can be exported in five formats: plain text, Markdown, JSON, SRT subtitles, and VTT subtitles. The subtitle formats include timestamps, so you can use them with video recordings of the same meeting.</p>
+
+                    <div class="code-block">
+                        <pre><code>voxtype meeting export latest --format text
+voxtype meeting export latest --format markdown
+voxtype meeting export latest --format json
+voxtype meeting export latest --format srt
+voxtype meeting export latest --format vtt</code></pre>
+                    </div>
+
+                    <h3>AI Meeting Summaries</h3>
+                    <p>After a meeting, you can generate a summary with key points, action items, and decisions using a local LLM via Ollama or a remote API endpoint.</p>
+
+                    <div class="code-block">
+                        <pre><code># Generate a summary using Ollama
+voxtype meeting summarize latest
+
+# Output as JSON for programmatic use
+voxtype meeting summarize latest --format json</code></pre>
+                    </div>
+
+                    <p>This requires Ollama running locally or a configured remote summarization endpoint. The summary extracts action items, key decisions, and a concise overview from the full transcript.</p>
+
+                    <h3>Setup ONNX Replaces Setup Parakeet</h3>
+                    <p>The <code>voxtype setup parakeet</code> command has been renamed to <code>voxtype setup onnx</code> to reflect that it now manages all ONNX-based engines, not just Parakeet. The old <code>setup parakeet</code> command still works as a hidden alias, so existing scripts and muscle memory won't break.</p>
+
+                    <div class="code-block">
+                        <pre><code># New name
+voxtype setup onnx
+
+# Old name still works
+voxtype setup parakeet</code></pre>
+                    </div>
+
+                    <h3>Other Changes</h3>
+                    <ul>
+                        <li>Shared Fbank feature extraction and CTC decoder modules reduce code duplication across ONNX engines</li>
+                        <li>Multi-engine transcription smoke tests for automated regression testing</li>
+                        <li>Fix Dolphin and Paraformer transcription backends after initial implementation</li>
+                        <li>Fix clippy warnings across the codebase</li>
+                    </ul>
+                </div>
+            </article>
 
             <!-- v0.5.x Era Posts -->
 
