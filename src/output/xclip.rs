@@ -13,14 +13,42 @@ use tokio::process::Command;
 
 /// xclip-based text output for X11
 pub struct XclipOutput {
+    /// Whether to show a desktop notification
+    notify: bool,
     /// Text to append after transcription
     append_text: Option<String>,
 }
 
 impl XclipOutput {
     /// Create a new xclip output
-    pub fn new(append_text: Option<String>) -> Self {
-        Self { append_text }
+    pub fn new(notify: bool, append_text: Option<String>) -> Self {
+        Self {
+            notify,
+            append_text,
+        }
+    }
+
+    /// Send a desktop notification
+    async fn send_notification(&self, text: &str) {
+        // Truncate preview for notification (use chars() to handle multi-byte UTF-8)
+        let preview = if text.chars().count() > 80 {
+            format!("{}...", text.chars().take(80).collect::<String>())
+        } else {
+            text.to_string()
+        };
+
+        let _ = Command::new("notify-send")
+            .args([
+                "--app-name=Voxtype",
+                "--urgency=low",
+                "--expire-time=3000",
+                "Copied to clipboard",
+                &preview,
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
     }
 }
 
@@ -76,6 +104,11 @@ impl TextOutput for XclipOutput {
             ));
         }
 
+        // Send notification if enabled
+        if self.notify {
+            self.send_notification(&text).await;
+        }
+
         tracing::info!("Text copied to X11 clipboard ({} chars)", text.len());
         Ok(())
     }
@@ -108,10 +141,10 @@ mod tests {
 
     #[test]
     fn test_new() {
-        let output = XclipOutput::new(None);
-        assert!(output.append_text.is_none());
+        let output = XclipOutput::new(true, None);
+        assert!(output.notify);
 
-        let output = XclipOutput::new(Some(" ".to_string()));
-        assert_eq!(output.append_text, Some(" ".to_string()));
+        let output = XclipOutput::new(false, None);
+        assert!(!output.notify);
     }
 }

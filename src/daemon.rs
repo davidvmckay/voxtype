@@ -517,8 +517,6 @@ pub struct Daemon {
     // GTCRN speech enhancer for mic echo cancellation
     #[cfg(feature = "onnx-common")]
     speech_enhancer: Option<std::sync::Arc<audio::enhance::GtcrnEnhancer>>,
-    // Media players that were paused when recording started (for resume on stop)
-    paused_media_players: Vec<String>,
 }
 
 impl Daemon {
@@ -614,7 +612,6 @@ impl Daemon {
             meeting_event_rx: None,
             #[cfg(feature = "onnx-common")]
             speech_enhancer: None,
-            paused_media_players: Vec::new(),
         }
     }
 
@@ -622,21 +619,6 @@ impl Daemon {
     fn play_feedback(&self, event: SoundEvent) {
         if let Some(ref feedback) = self.audio_feedback {
             feedback.play(event);
-        }
-    }
-
-    /// Pause MPRIS media players if configured, storing which ones were paused
-    async fn pause_media_players(&mut self) {
-        if self.config.audio.pause_media {
-            self.paused_media_players = audio::media::pause_playing_players().await;
-        }
-    }
-
-    /// Resume any MPRIS media players that were paused at recording start
-    fn resume_media_players(&mut self) {
-        if !self.paused_media_players.is_empty() {
-            let players = std::mem::take(&mut self.paused_media_players);
-            tokio::spawn(audio::media::resume_players(players));
         }
     }
 
@@ -945,14 +927,13 @@ impl Daemon {
 
     /// Reset state to idle and run post_output_command to reset compositor submap
     /// Call this when exiting from recording/transcribing without normal output flow
-    async fn reset_to_idle(&mut self, state: &mut State) {
+    async fn reset_to_idle(&self, state: &mut State) {
         cleanup_output_mode_override();
         cleanup_model_override();
         cleanup_profile_override();
         cleanup_bool_override("auto_submit");
         cleanup_bool_override("shift_enter");
         cleanup_bool_override("smart_auto_submit");
-        self.resume_media_players();
         *state = State::Idle;
         self.update_state("idle");
 
@@ -1261,7 +1242,7 @@ impl Daemon {
 
     /// Handle transcription completion (called when transcription_task completes)
     async fn handle_transcription_result(
-        &mut self,
+        &self,
         state: &mut State,
         result: std::result::Result<TranscriptionResult, tokio::task::JoinError>,
     ) {
@@ -1393,7 +1374,6 @@ impl Daemon {
                                     FileMode::Append => "appended",
                                 };
                                 tracing::info!("{} transcription to {:?}", mode_str, output_path);
-                                self.play_feedback(SoundEvent::TranscriptionComplete);
                             }
                             Err(e) => {
                                 tracing::error!(
@@ -1404,7 +1384,6 @@ impl Daemon {
                             }
                         }
 
-                        self.resume_media_players();
                         *state = State::Idle;
                         self.update_state("idle");
                         return;
@@ -1463,21 +1442,16 @@ impl Daemon {
                             .await
                     {
                         tracing::error!("Output failed: {}", e);
-                    } else {
-                        self.play_feedback(SoundEvent::TranscriptionComplete);
-
-                        if self.config.output.notification.on_transcription {
-                            // Send notification on successful output
-                            output::send_transcription_notification(
-                                &final_text,
-                                self.config.output.notification.show_engine_icon,
-                                self.config.engine,
-                            )
-                            .await;
-                        }
+                    } else if self.config.output.notification.on_transcription {
+                        // Send notification on successful output
+                        output::send_transcription_notification(
+                            &final_text,
+                            self.config.output.notification.show_engine_icon,
+                            self.config.engine,
+                        )
+                        .await;
                     }
 
-                    self.resume_media_players();
                     *state = State::Idle;
                     self.update_state("idle");
                 }
@@ -1787,7 +1761,6 @@ impl Daemon {
                                         }
                                         self.update_state("recording");
                                         self.play_feedback(SoundEvent::RecordingStart);
-                                        self.pause_media_players().await;
 
                                         // Run pre-recording hook (e.g., enter compositor submap for cancel)
                                         if let Some(cmd) = &self.config.output.pre_recording_command {
@@ -1974,7 +1947,6 @@ impl Daemon {
                                         }
                                         self.update_state("recording");
                                         self.play_feedback(SoundEvent::RecordingStart);
-                                        self.pause_media_players().await;
 
                                         // Run pre-recording hook (e.g., enter compositor submap for cancel)
                                         if let Some(cmd) = &self.config.output.pre_recording_command {
@@ -2405,7 +2377,6 @@ impl Daemon {
                                     }
                                     self.update_state("recording");
                                     self.play_feedback(SoundEvent::RecordingStart);
-                                    self.pause_media_players().await;
 
                                     // Run pre-recording hook (e.g., enter compositor submap for cancel)
                                     if let Some(cmd) = &self.config.output.pre_recording_command {
