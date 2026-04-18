@@ -25,6 +25,8 @@ use tokio::time::timeout;
 pub struct PostProcessor {
     command: String,
     timeout: Duration,
+    trim: bool,
+    fallback_on_empty: bool,
 }
 
 impl PostProcessor {
@@ -33,6 +35,8 @@ impl PostProcessor {
         Self {
             command: config.command.clone(),
             timeout: Duration::from_millis(config.timeout_ms),
+            trim: config.trim,
+            fallback_on_empty: config.fallback_on_empty,
         }
     }
 
@@ -45,11 +49,14 @@ impl PostProcessor {
     pub async fn process_with_context(&self, text: &str, context: Option<&str>) -> String {
         match self.execute_command_with_env(text, context).await {
             Ok(processed) => {
-                if processed.is_empty() {
+                if processed.is_empty() && self.fallback_on_empty {
                     tracing::warn!(
                         "Post-process command returned empty output, using original text"
                     );
                     text.to_string()
+                } else if processed.is_empty() {
+                    tracing::debug!("Post-process command returned empty output");
+                    String::new()
                 } else {
                     tracing::debug!(
                         "Post-processed ({} -> {} chars)",
@@ -124,7 +131,12 @@ impl PostProcessor {
         let processed = String::from_utf8(output.stdout)
             .map_err(|e| PostProcessError::InvalidUtf8(e.to_string()))?;
 
-        Ok(processed.trim().to_string())
+        if self.trim {
+            Ok(processed.trim().to_string())
+        } else {
+            // Only strip trailing newlines (artifact of shell output), preserve other whitespace
+            Ok(processed.trim_end_matches('\n').to_string())
+        }
     }
 }
 
@@ -174,6 +186,8 @@ mod tests {
         PostProcessConfig {
             command: command.to_string(),
             timeout_ms,
+            trim: true,
+            fallback_on_empty: true,
         }
     }
 
@@ -266,6 +280,57 @@ mod tests {
         let processor = PostProcessor::new(&config);
         let result = processor.process("test input").await;
         assert_eq!(result, "prefix:\ntest input");
+    }
+
+    #[tokio::test]
+    async fn test_no_trim_preserves_trailing_space() {
+        // When trim = false, trailing spaces from the command should be preserved
+        let config = PostProcessConfig {
+            command: "printf '%s ' \"$( cat )\"".to_string(),
+            timeout_ms: 5000,
+            trim: false,
+            fallback_on_empty: true,
+        };
+        let processor = PostProcessor::new(&config);
+        let result = processor.process("hello world.").await;
+        assert_eq!(result, "hello world. ");
+    }
+
+    #[tokio::test]
+    async fn test_no_trim_still_strips_trailing_newlines() {
+        // Even with trim = false, trailing newlines (shell artifacts) are stripped
+        let config = PostProcessConfig {
+            command: "echo 'hello'".to_string(),
+            timeout_ms: 5000,
+            trim: false,
+            fallback_on_empty: true,
+        };
+        let processor = PostProcessor::new(&config);
+        let result = processor.process("ignored").await;
+        assert_eq!(result, "hello");
+    }
+
+    #[tokio::test]
+    async fn test_no_fallback_on_empty_returns_empty() {
+        // When fallback_on_empty = false, empty output is returned as-is
+        let config = PostProcessConfig {
+            command: "echo -n ''".to_string(),
+            timeout_ms: 5000,
+            trim: true,
+            fallback_on_empty: false,
+        };
+        let processor = PostProcessor::new(&config);
+        let result = processor.process("original text").await;
+        assert_eq!(result, "");
+    }
+
+    #[tokio::test]
+    async fn test_fallback_on_empty_default_returns_original() {
+        // Default behavior: empty output falls back to original text
+        let config = make_config("echo -n ''", 5000);
+        let processor = PostProcessor::new(&config);
+        let result = processor.process("original text").await;
+        assert_eq!(result, "original text");
     }
 
     #[tokio::test]
