@@ -1535,6 +1535,20 @@ impl Daemon {
         // Initialize hotkey listener (if enabled)
         let mut hotkey_listener = if self.config.hotkey.enabled {
             tracing::info!("Hotkey: {}", self.config.hotkey.key);
+
+            // Warn about profile modifiers that reference undefined profiles
+            for (key_name, profile_name) in &self.config.hotkey.profile_modifiers {
+                if self.config.get_profile(profile_name).is_none() {
+                    tracing::warn!(
+                        "Profile modifier {} references undefined profile '{}' — \
+                         add a [profiles.{}] section to your config",
+                        key_name,
+                        profile_name,
+                        profile_name
+                    );
+                }
+            }
+
             let secondary_model = self.config.whisper.secondary_model.clone();
             Some(hotkey::create_listener(
                 &self.config.hotkey,
