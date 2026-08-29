@@ -128,6 +128,77 @@ Display the current configuration.
 voxtype config
 ```
 
+### `voxtype configure`
+
+Open an interactive terminal UI for editing every voxtype option. The TUI
+edits `~/.config/voxtype/config.toml` directly, preserves comments and
+unknown fields, and validates the file before swapping it in. Saving a
+change that would break the daemon's parser leaves the on-disk file
+untouched and reports the parse error.
+
+```bash
+voxtype configure
+```
+
+The TUI is also surfaced as a `.desktop` entry, so it shows up in Walker,
+fuzzel, rofi, KRunner, and GNOME Activities as **"Voxtype Configuration"**.
+The launcher script picks the first available terminal emulator (`$TERMINAL`,
+then ghostty / alacritty / kitty / foot / wezterm / konsole / xterm / xfce4-terminal) and
+sets the window class to `voxtype` so compositors can float it.
+
+#### Sections
+
+| Section | What it covers |
+|---|---|
+| General | Active engine, variant binary, daemon status, hardware-aware variant recommendation |
+| Engine | Per-engine tuning for Whisper / Parakeet / Moonshine / SenseVoice / Paraformer / Dolphin / Omnilingual / Cohere |
+| Hotkey | PTT key, mode (PTT vs toggle), cancel key, modifier key, evdev-listener toggle |
+| Audio | Input device, max recording length, MPRIS pause/ducking, audio feedback theme/volume |
+| Output | Mode (type/clipboard/paste/file), driver order, auto-submit, post-process command |
+| Text | Spoken-punctuation toggle, smart-auto-submit, custom replacements list editor |
+| VAD | Silero VAD enable, backend (auto/energy/whisper), threshold |
+| Meeting | Meeting mode enable, speaker diarization, audio source (mic/system/both) |
+| Notifications | Desktop notifications for recording start/stop and transcription |
+| Waybar | Status integration: icon theme + per-state icon overrides |
+| Advanced | GPU isolation, on-demand model loading, flash attention, eager processing, GPU device |
+
+#### Keyboard
+
+```
+Global         Tab / Esc focus toggle    ?  help overlay   q quit
+Sidebar        ↑↓ / jk navigate          Enter / → / l open section
+Section form   ↑↓ navigate fields        ←→ / hl cycle value
+               Space toggle              Enter / i edit text field
+               s save                    r revert
+Text editor    type insert               ←→ / Home / End / Ctrl-A/E
+               Backspace / Delete        Ctrl-W delete word
+               Ctrl-U clear              Enter commit / Esc cancel
+```
+
+Press `?` from anywhere in the TUI for the same reference as a popup.
+
+#### Hardware-aware recommendations
+
+The General section detects your CPU (AVX2 / AVX-512) and GPU (NVIDIA /
+AMD), then marks the recommended variant for each engine family with `★`.
+The About pane explains the choice (`"AMD GPU detected. The MIGraphX
+execution provider is new… ONNX (AVX-512) on CPU is the safe default."`).
+
+When you switch the engine on the Engine page, the TUI also picks the
+matching binary variant if one is needed (e.g. moving from Whisper to
+Parakeet swaps the symlink at `/usr/bin/voxtype` from a Whisper variant to
+an ONNX variant). The actual symlink change runs through `pkexec` so you
+get the standard polkit prompt.
+
+#### Compositor binding awareness
+
+If you have the evdev listener disabled and rely on compositor bindings,
+the Hotkey screen scans `~/.config/hypr/*.conf`, `~/.config/sway/config*`,
+and `~/.config/niri/config.kdl` for any `voxtype record` / `voxtype meeting`
+bindings, lists them in the About pane, and suggests config-format-specific
+snippets for any standard role you haven't bound (cancel, toggle, meeting
+start/stop). Suggestions skip key combos already in use by other actions.
+
 ### `voxtype status`
 
 Query the daemon's current state (for Waybar/Polybar integration).
@@ -184,6 +255,73 @@ voxtype setup dms --qml        # Output raw QML content
 ```
 
 See [With DankMaterialShell](#with-dankmaterialshell-kde-plasma) for details.
+
+### `voxtype setup quickshell`
+
+Install the Quickshell QML tree so `voxtype-osd-quickshell` (and the
+optional `[osd] frontend = "quickshell"` config setting) can find it.
+This is needed if you installed voxtype from source or from a `.deb`/`.rpm`
+package that didn't drop the QML files into `/usr/share/voxtype/`. The AUR
+packages already install the system-wide copy, but you can still run this
+command to put a per-user copy under `$XDG_DATA_HOME/voxtype/quickshell/`
+for customization.
+
+```bash
+voxtype setup quickshell                       # Install QML + symlink the bridge
+voxtype setup quickshell --target DIR          # Install QML to a custom location
+voxtype setup quickshell --source DIR          # Override the source tree (default: auto-detect)
+voxtype setup quickshell --force               # Overwrite an existing install
+voxtype setup quickshell --print-bindings      # Print the bindings only, do not copy
+voxtype setup quickshell --bridge PATH         # Override the audio-bridge source binary
+voxtype setup quickshell --bridge-target PATH  # Override the audio-bridge symlink location
+voxtype setup quickshell --skip-bridge         # Skip the audio-bridge symlink entirely
+```
+
+The default QML target is `$XDG_DATA_HOME/voxtype/quickshell/` (or
+`~/.local/share/voxtype/quickshell/` if `XDG_DATA_HOME` is unset). The
+launcher searches that path first, then `/usr/share/voxtype/quickshell/`.
+
+The command also symlinks `voxtype-audio-bridge` into
+`$XDG_BIN_HOME/voxtype-audio-bridge` (or `~/.local/bin/voxtype-audio-bridge`)
+so the QML waveform can spawn the sidecar via a normal PATH lookup. The
+AUR `voxtype-bin` package installs the bridge under
+`/usr/lib/voxtype/voxtype-audio-bridge`, which is not on the default
+PATH; the symlink is what makes the waveform light up after install.
+Pass `--skip-bridge` if you already have the bridge on PATH and don't
+want a per-user symlink, or `--bridge-target` to point the symlink at a
+different user-owned directory. Writing outside of `$HOME` is refused
+unless `--force` is also passed.
+
+The command prints Hyprland, Sway, and River keybinding examples that
+toggle the Wave 2 engine-picker and meeting-controls panels via flag
+files under `$XDG_RUNTIME_DIR/voxtype/`. The OSD itself does not need a
+keybinding; it activates automatically when the daemon enters the
+recording state.
+
+Quickshell also supports OSD customization through `[osd]`:
+
+```toml
+[osd]
+frontend = "quickshell"
+style = "default"      # built-in style, package name, or package path
+# palette = "omarchy" # omit for auto, or force active Omarchy theme colors
+layout = "compact"    # compact, wide, minimal, tile, orb, custom
+
+[osd.frame]
+background = "none"   # semantic role, literal color, or none
+border = "none"       # state, semantic role, literal color, or none
+glow = true
+```
+
+No-code visual recipes live under `[[osd.visual.layers]]` and can combine
+layers such as `shadow`, `pulse`, `bars`, `waveform`, `ring`, `meter`, `icon`,
+and `label`. Colors are
+semantic Omarchy tokens by default (`accent`, `background`, `foreground`,
+`success`, `warning`, `error`). `layout` changes the outer frame: strip-style
+layouts use `compact`, `wide`, or `minimal`, while `tile` and `orb` create
+non-strip OSD frames. `[osd.frame]` can remove or recolor the host background
+and border without changing QML. Advanced users can select a trusted package
+directory with `plugin_path`; package QML is not sandboxed.
 
 ### `voxtype record`
 
@@ -276,6 +414,12 @@ sample_rate = 16000
 # Recording automatically stops and transcribes after this time
 max_duration_secs = 60
 
+# Optional media behavior while recording
+# pause_media pauses MPRIS players; duck_media lowers active stream volume
+# pause_media = false
+# duck_media = false
+# duck_media_volume_percent = 70
+
 [whisper]
 # Model to use for transcription
 # Options: tiny, tiny.en, base, base.en, small, small.en, medium, medium.en, large-v3
@@ -322,6 +466,24 @@ on_recording_stop = false
 # Show notification with transcribed text
 on_transcription = true
 ```
+
+### Cloud Backend: Soniox
+
+For a cloud streaming alternative to the local engines above, voxtype supports [Soniox](https://soniox.com). Different trade-off space: paid SaaS, no local model, 60+ languages with strong Hungarian/EU coverage, sub-second partials at the cursor.
+
+Soniox ships in every release binary. Set `SONIOX_API_KEY` and:
+
+```toml
+engine = "soniox"
+
+[hotkey]
+mode = "toggle"   # required when streaming (default)
+
+[soniox]
+language_hints = ["en"]
+```
+
+See [SONIOX.md](SONIOX.md) for the full reference (realtime vs async modes, performance tips with dotoold, privacy considerations).
 
 ### Creating a Custom Configuration
 
@@ -642,6 +804,7 @@ Voxtype supports seven speech-to-text engines. Whisper uses whisper.cpp and work
 | **Paraformer** | Chinese + English dictation | No | Chinese (with English code-switching) |
 | **Dolphin** | Dictation-optimized, fast CTC | No | Chinese + English |
 | **Omnilingual** | Broadest language coverage in ONNX engines | No | 50+ languages |
+| **Cohere** | #1 Open ASR Leaderboard accuracy | Optional (CUDA via `cohere-cuda`) | Arabic, German, English, Spanish, French, Hindi, Italian, Japanese, Korean, Dutch, Portuguese, Russian, Turkish, Chinese (14) |
 
 ### Selecting an Engine
 
@@ -658,6 +821,7 @@ engine = "sensevoice"
 engine = "paraformer"
 engine = "dolphin"
 engine = "omnilingual"
+engine = "cohere"
 ```
 
 **Via CLI flag** (overrides config):
@@ -670,9 +834,10 @@ voxtype --engine sensevoice daemon
 voxtype --engine paraformer daemon
 voxtype --engine dolphin daemon
 voxtype --engine omnilingual daemon
+voxtype --engine cohere daemon
 ```
 
-Valid `--engine` values: `whisper`, `parakeet`, `moonshine`, `sensevoice`, `paraformer`, `dolphin`, `omnilingual`.
+Valid `--engine` values: `whisper`, `parakeet`, `moonshine`, `sensevoice`, `paraformer`, `dolphin`, `omnilingual`, `cohere`.
 
 ### Switching to an ONNX Engine
 
@@ -718,7 +883,17 @@ engine = "parakeet"
 model = "parakeet-tdt-0.6b-v3"  # or "parakeet-tdt-0.6b-v3-int8"
 # model_type = "tdt"            # "tdt" (recommended) or "ctc", auto-detected if omitted
 # on_demand_loading = false
+# streaming = true              # type text as you speak; requires toggle activation
 ```
+
+**Streaming dictation (experimental):** set `[parakeet] streaming = true` and
+voxtype types text incrementally while you speak. Streaming requires
+`[hotkey] mode = "toggle"` (or a compositor binding that calls
+`voxtype record toggle`). Synthetic key events from streaming output
+disrupt libinput's tracking of held physical keys on Wayland compositors,
+so a held PTT key never fires its release event. The daemon auto-promotes
+push-to-talk to toggle at startup when streaming is enabled and logs a
+warning.
 
 See [PARAKEET.md](PARAKEET.md) for detailed setup instructions.
 
@@ -840,6 +1015,46 @@ model = "omnilingual-large"  # Default model
 # threads = 4
 # on_demand_loading = false
 ```
+
+### Cohere Transcribe
+
+Cohere Transcribe is an encoder-decoder ASR model from Cohere Labs running via ONNX Runtime. It currently sits at #1 on the Open ASR Leaderboard. It offers:
+
+- Best-in-class accuracy on a wide range of audio (5.42 average WER on the leaderboard)
+- Support for 14 languages with a single model
+- Whisper-style task tokens for punctuation, capitalization, and inverse text normalization
+- Optional CUDA acceleration via the `cohere-cuda` feature
+
+The trade-off: it's the largest model voxtype ships at ~3.1 GB on disk for the int8 quantization. Plan accordingly on laptops with limited storage.
+
+**Requirements:**
+- An ONNX-enabled binary (`voxtype-*-onnx-*`)
+- ~3.1 GB free disk space for the model
+- The Cohere Transcribe model downloaded (`voxtype setup model`, then pick the Cohere section)
+
+**Configuration:**
+
+```toml
+engine = "cohere"
+
+[cohere]
+model = "cohere-transcribe-int8"  # Default model
+language = "en"                    # One of: ar, de, en, es, fr, hi, it, ja, ko, nl, pt, ru, tr, zh
+# threads = 4
+# on_demand_loading = false
+```
+
+**Supported languages:**
+
+Arabic (`ar`), German (`de`), English (`en`, default), Spanish (`es`), French (`fr`), Hindi (`hi`), Italian (`it`), Japanese (`ja`), Korean (`ko`), Dutch (`nl`), Portuguese (`pt`), Russian (`ru`), Turkish (`tr`), Mandarin Chinese (`zh`).
+
+**Installing:**
+
+```bash
+voxtype setup model      # Pick the Cohere section, confirm the size warning
+```
+
+The download fetches five files from the `cstr/cohere-transcribe-onnx-int8` HuggingFace repository (Apache 2.0 licensed, not gated): the encoder/decoder ONNX graphs, their weight sidecars, and `tokens.txt`.
 
 ---
 
@@ -1303,7 +1518,6 @@ Then record for 10+ seconds. You should see log messages like:
 ```
 
 ---
-
 ## Output Modes
 
 ### Type Mode (Default)
@@ -1522,6 +1736,45 @@ Or via environment variable for the whole session:
 VOXTYPE_SMART_AUTO_SUBMIT=true voxtype
 ```
 
+**Filter filler words ("uh", "um", ...):**
+
+Voxtype filters single-syllable filler words by default. To turn it off:
+
+```toml
+[text]
+filter_filler_words = false
+```
+
+When enabled (the default), Voxtype strips common filler words from each transcription before output and cleans up the surrounding punctuation. Word boundaries are respected, so "umbrella" and "summer" are untouched.
+
+```
+# You say:    "Well, um, I think we should ship it"
+# Voxtype types: "Well, I think we should ship it"
+```
+
+The default list contains single-syllable disfluencies: `uh`, `um`, `er`, `ah`, `eh`, `hmm`, `hm`, `mm`, `mhm`. Override it to add your own words:
+
+```toml
+[text]
+filter_filler_words = true
+filler_words = ["uh", "um", "er", "like", "you know"]
+```
+
+CLI flag (overrides config for the running daemon):
+
+```bash
+voxtype --filter-fillers       # force on
+voxtype --no-filter-fillers    # force off
+```
+
+Or via environment variable:
+
+```bash
+VOXTYPE_FILTER_FILLERS=true voxtype
+```
+
+The filter runs before `replacements` and the `[post_process]` LLM hook, so any custom replacements still apply on top of filtered text.
+
 **Shift+Enter for newlines:**
 
 ```toml
@@ -1611,6 +1864,9 @@ If you prefer manual setup, add these to your voxtype config:
 
 ```toml
 [output]
+# Command to run when recording starts
+pre_recording_command = "hyprctl dispatch submap voxtype_recording"
+
 # Command to run BEFORE typing (e.g., switch to modifier-blocking submap)
 pre_output_command = "hyprctl dispatch submap voxtype_suppress"
 
@@ -1983,6 +2239,7 @@ max_duration_mins = 180          # Maximum meeting length (0 = unlimited)
 mic_device = "default"           # Microphone (uses audio.device if not set)
 loopback_device = "auto"         # Capture remote participants: "auto", "disabled", or device name
 echo_cancel = "auto"             # GTCRN neural enhancement + transcript dedup
+vad_threshold = 0.01             # Lower to 0.001 for quiet mics; 0.0 disables meeting VAD
 
 [meeting.diarization]
 enabled = true
@@ -2180,7 +2437,7 @@ icon_theme = "nerd-font"  # or: material, phosphor, codicons, minimal, dots, arr
 
 Available themes include Nerd Font, Material Design Icons, Phosphor, VS Code Codicons, and several universal themes that don't require special fonts (minimal, dots, arrows, text).
 
-**Extended status info:** Use `--extended` to include model, device, and backend in the JSON output and tooltip:
+**Extended status info:** Use `--extended` to include model, device, and backend in the JSON output and tooltip. The backend field describes the running daemon's binary, not the package-selected one, so it stays accurate when the daemon was started before a variant switch or from a systemd `ExecStart=` override. A daemon running a binary that is not an installed variant reports `custom`:
 
 ```json
 "custom/voxtype": {

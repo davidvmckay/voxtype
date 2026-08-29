@@ -77,7 +77,7 @@ pub enum TranscribeError {
     #[error("Model not found: {0}\n  Run 'voxtype setup' to download models.")]
     ModelNotFound(String),
 
-    #[error("Whisper initialization failed: {0}")]
+    #[error("Transcriber initialization failed: {0}")]
     InitFailed(String),
 
     #[error("Transcription failed: {0}")]
@@ -94,6 +94,9 @@ pub enum TranscribeError {
 
     #[error("Remote server error: {0}")]
     RemoteError(String),
+
+    #[error("{0}")]
+    LicenseRequired(String),
 }
 
 /// Errors related to Voice Activity Detection
@@ -136,6 +139,15 @@ pub enum OutputError {
     #[error("xclip not found in PATH. Install xclip via your package manager.")]
     XclipNotFound,
 
+    #[error(
+        "Neither xclip nor xsel is available for X11 clipboard access.\n  \
+         Install one via your package manager:\n    \
+         sudo pacman -S xclip   # Arch / Manjaro\n    \
+         sudo apt install xclip # Debian / Ubuntu\n    \
+         sudo dnf install xclip # Fedora"
+    )]
+    X11ClipboardToolMissing,
+
     #[error("Text injection failed: {0}")]
     InjectionFailed(String),
 
@@ -173,6 +185,7 @@ pub enum MeetingError {
 /// Result type alias using VoxtypeError
 pub type Result<T> = std::result::Result<T, VoxtypeError>;
 
+#[cfg(target_os = "linux")]
 impl From<evdev::Error> for HotkeyError {
     fn from(e: evdev::Error) -> Self {
         HotkeyError::Evdev(e.to_string())

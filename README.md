@@ -4,30 +4,51 @@
 
 **[voxtype.io](https://voxtype.io)**
 
-Push-to-talk voice-to-text for Linux. Optimized for Wayland, works on X11 too.
+Voice-to-text for Linux. 9-11× realtime on your CPU. Local by default.
 
-Hold a hotkey (default: ScrollLock) while speaking, release to transcribe and output the text at your cursor position.
+Hold a hotkey (default: ScrollLock) while speaking, release to transcribe and output the text at your cursor position. Voxtype runs Cohere Transcribe (#1 on the Open ASR Leaderboard) faster than realtime on a plain Zen 4 CPU. Parakeet, Whisper, and five more engines if you want them. No cloud, no subscription, no telemetry.
 
 ## Features
 
-- **Works on any Linux desktop** - Uses compositor keybindings (Hyprland, Sway, River) with evdev fallback for X11 and other environments
-- **Fully offline by default** - Uses whisper.cpp for local transcription, with optional remote server support
-- **7 transcription engines** - Whisper, Parakeet, Moonshine, SenseVoice, Paraformer, Dolphin, and Omnilingual (see [Supported Engines](#supported-engines) below)
-- **Chinese, Japanese, Korean, and 1600+ languages** - SenseVoice, Dolphin, and Omnilingual add native support for CJK and other non-Latin scripts
-- **Meeting mode** - Continuous meeting transcription with chunked processing, speaker attribution, and export to Markdown, JSON, SRT, or VTT
-- **Fallback chain** - Types via wtype (best CJK support), falls back to dotool (keyboard layout support), ydotool, then clipboard
-- **Push-to-talk or Toggle mode** - Hold to record, or press once to start/stop
-- **Audio feedback** - Optional sound cues when recording starts/stops
-- **Configurable** - Choose your hotkey, model size, output mode, and more
-- **Waybar integration** - Optional status indicator shows recording state in your bar
+### Speed and engines
+
+- **Cohere Transcribe at 9-11× realtime — on your CPU.** Quantized to 1.5 GB (q4f16). Punctuation, capitalization, and inverse text normalization out of the box. Sits at #1 on the Open ASR Leaderboard. *(New in 0.7.0)*
+- **Parakeet on AMD and NVIDIA GPUs.** MIGraphX 7.2 for Radeon, separate CUDA 12 and CUDA 13 binaries for every NVIDIA driver generation, Vulkan for Whisper across vendors. *(MIGraphX new in 0.7.0)*
+- **Text processing built in.** Spoken punctuation (`"comma"` → `,`), per-user replacement tables for common mistranscriptions, and an optional post-processing pipe through any LLM or shell script. Fix domain terms, drop filler words, polish grammar — all without leaving voxtype.
+- **Dynamic per-engine model loading.** Configure all 7 engines, pay memory only for the active one. Models load on first use and unload when idle.
+- **Seven transcription engines.** Whisper, Parakeet, Moonshine, SenseVoice, Paraformer, Dolphin, Omnilingual. Switch with `voxtype configure` or one config line. CJK and 1600+ languages covered by the multilingual engines.
+- **Meeting mode.** Continuous transcription with chunked processing, speaker attribution, and export to Markdown, JSON, SRT, or VTT.
+
+### Native Linux integration
+
+- **Hyprland, Niri, Sway, River, GNOME, KDE.** Compositor keybindings everywhere, evdev fallback for X11, Wayland-first typing via wtype with full CJK support. Falls back through dotool → ydotool → clipboard if any layer is unavailable.
+- **Pauses your music.** Auto-pauses Spotify, Plasma media players, anything that speaks MPRIS the moment you start dictating. Resumes on release.
+- **Floating waveform OSD.** Matches your swayosd band by default — same vertical position as volume and brightness — so the level meter sits where you already look for system feedback.
+- **Interactive TUI configure.** `voxtype configure` (also surfaces in Walker / fuzzel / rofi) edits every option in `~/.config/voxtype/config.toml` for you — no hand-editing TOML. Auto-downloads missing models, swaps GPU binaries via pkexec, restarts the daemon when needed.
+- **Push-to-talk or toggle.** Hold to record, or press once to start/stop. Optional audio cues when recording starts/stops.
+
+### Trust
+
+- **Local by default. No cloud. No subscription. No telemetry.** Optional remote Whisper servers when you want them. Your audio stays on your machine until you choose otherwise.
+- **MIT licensed.** AUR (`voxtype`, `voxtype-bin`, plus `voxtype-bin-rc` for testers who want pre-release builds — see [docs/INSTALL.md](docs/INSTALL.md#arch-linux)), `.deb`, `.rpm`, Homebrew on macOS. Signed release binaries from a reproducible Docker pipeline.
 
 ## Quick Start
 
+Most users should install a [pre-built package](docs/INSTALL.md). The steps below are for building from source.
+
 ```bash
-# 1. Build
+# 1. Install build dependencies
+# Fedora:
+sudo dnf install rust cargo alsa-lib-devel clang-devel cmake pkgconf
+# Arch:
+sudo pacman -S rustup alsa-lib clang cmake pkgconf
+# Debian/Ubuntu:
+sudo apt install cargo libasound2-dev libclang-dev cmake pkg-config
+
+# 2. Build
 cargo build --release
 
-# 2. Install typing backend (Wayland)
+# 3. Install typing backend (Wayland)
 # Fedora:
 sudo dnf install wtype
 # Arch:
@@ -35,15 +56,17 @@ sudo pacman -S wtype
 # Ubuntu:
 sudo apt install wtype
 
-# 3. Download whisper model
+# 4. Download whisper model
 ./target/release/voxtype setup --download
 
-# 4. Add keybinding to your compositor
+# 5. Add keybinding to your compositor
 # See "Compositor Keybindings" section below
 
-# 5. Run
+# 6. Run
 ./target/release/voxtype
 ```
+
+For the full per-distro dependency matrix (including GPU backends), see [docs/INSTALL.md](docs/INSTALL.md#build-dependencies-source-builds-only).
 
 ### Compositor Keybindings
 
@@ -171,6 +194,11 @@ type_delay_ms = 0   # Increase if characters are dropped
 # auto_submit = true  # Send Enter after transcription (for chat apps, terminals)
 # Note: "paste" mode copies to clipboard then simulates Ctrl+V
 #       Useful for non-US keyboard layouts where ydotool typing fails
+# For multilingual layouts with variants through direct dotool fallback:
+# [output.language_to_variant]
+# ru = "phonetic"
+# dotoolc does not work with variants and cannot receive these hints. When
+# using dotool, switch your desktop layout to Russian phonetic before dictating.
 
 [output.notification]
 on_recording_start = false  # Notify when PTT activates
@@ -579,6 +607,13 @@ which wtype dotool ydotool
 # In ~/.config/voxtype/config.toml:
 # [output]
 # dotool_xkb_layout = "de"  # Your layout (de, fr, es, etc.)
+# dotool_xkb_variant = "nodeadkeys"  # Optional fixed variant; uses direct dotool
+#
+# For multilingual dictation, prefer per-language variants through direct dotool:
+# [output.language_to_variant]
+# ru = "phonetic"
+# dotoolc does not work with variants and cannot receive these hints. Also
+# switch your desktop layout to the target layout before dictating.
 
 # If using ydotool fallback (X11/TTY), start the daemon:
 systemctl --user start ydotool
@@ -645,7 +680,7 @@ flowchart LR
 
 **Fallback: evdev hotkey.** For X11 or compositors without key-release support, voxtype includes a built-in hotkey using evdev (the Linux input subsystem). This requires the user to be in the `input` group.
 
-**Why wtype + dotool + ydotool?** On Wayland, wtype uses the virtual-keyboard protocol for text input, with excellent Unicode/CJK support and no daemon required. When wtype fails (KDE/GNOME), dotool provides keyboard layout support via XKB for non-US layouts. As a final fallback, ydotool uses uinput for text injection on X11/TTY. This combination ensures Voxtype works on any Linux desktop with proper keyboard layout support.
+**Why wtype + dotool + ydotool?** On Wayland, wtype uses the virtual-keyboard protocol for text input, with excellent Unicode/CJK support and no daemon required. When wtype fails (KDE/GNOME), direct dotool fallback provides keyboard layout support via XKB for non-US layouts. As a final fallback, ydotool uses uinput for text injection on X11/TTY. This combination ensures Voxtype works on any Linux desktop with proper keyboard layout support.
 
 **Post-processing.** Transcriptions can optionally be piped through an external command before output. Use this to integrate local LLMs (Ollama, llama.cpp) for grammar correction, text expansion, or domain-specific vocabulary. Any command that reads stdin and writes stdout works.
 
@@ -673,10 +708,13 @@ We want to hear from you! Voxtype is a young project and your feedback helps mak
 - [Zubair](https://github.com/mzubair481) - dotool output driver with keyboard layout support
 - [ayoahha](https://github.com/ayoahha) - CLI backend for whisper-cli subprocess transcription
 - [Loki Coyote](https://github.com/lokkju) - eitype output driver for KDE/GNOME support, media keys and numeric keycode hotkey support
+- [Christopher Albert](https://github.com/krystophny) - macOS port foundation, CoreAudio capture, CGEvent output, Homebrew packaging
 - [Umesh](https://github.com/radiorambo) - Documentation website
 - [Sami Jawhar](https://github.com/sjawhar) - Eager input processing wiring
 - [KaiStarkk](https://github.com/KaiStarkk) - Post-process trim and fallback_on_empty options
 - [graysky](https://github.com/graysky2) - Flash attention config fix
+- [OldJobobo](https://github.com/OldJobobo) - Quickshell OSD theming, Omarchy theme state path support, configurable media ducking, degenerate Whisper transcript retry; co-owns `quickshell/`
+- [Matthias Breddin](https://github.com/lunetics) - IBus non-ASCII reordering troubleshooting, Rust 1.98 clippy fix, media ducking review
 
 ## License
 

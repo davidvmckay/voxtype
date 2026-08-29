@@ -11,6 +11,7 @@ use super::Transcriber;
 use crate::config::{Config, LanguageConfig, WhisperConfig};
 use crate::error::TranscribeError;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 /// Whisper-based transcriber
@@ -27,6 +28,12 @@ pub struct WhisperTranscriber {
     context_window_optimization: bool,
     /// Initial prompt to provide context for transcription
     initial_prompt: Option<String>,
+    /// Two-letter code for the language used during the most recent
+    /// `transcribe()` call. Populated for single-language and constrained
+    /// auto-detection modes; left empty for unconstrained auto-detection
+    /// (since whisper-rs does not currently expose the chosen language
+    /// from the full() pipeline). Read via [`Transcriber::last_detected_language`].
+    last_language: Mutex<Option<String>>,
 }
 
 impl WhisperTranscriber {
@@ -66,7 +73,102 @@ impl WhisperTranscriber {
             threads,
             context_window_optimization: config.context_window_optimization,
             initial_prompt: config.initial_prompt.clone(),
+            last_language: Mutex::new(None),
         })
+    }
+
+    fn build_params<'a, 'b>(
+        &'a self,
+        selected_language: Option<&'a str>,
+        duration_secs: f32,
+        retry: bool,
+    ) -> FullParams<'a, 'b> {
+        let mut params = if retry {
+            FullParams::new(SamplingStrategy::BeamSearch {
+                beam_size: 5,
+                patience: -1.0,
+            })
+        } else {
+            FullParams::new(SamplingStrategy::Greedy { best_of: 1 })
+        };
+
+        match selected_language {
+            Some(lang) => params.set_language(Some(lang)),
+            None => params.set_language(None),
+        }
+
+        params.set_translate(self.translate);
+        params.set_n_threads(self.threads as i32);
+
+        // Disable output we don't need
+        params.set_print_special(false);
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_timestamps(false);
+
+        // Improve transcription quality
+        params.set_suppress_blank(true);
+        params.set_suppress_nst(true);
+
+        // Prevent hallucination/looping by not conditioning on previous text.
+        params.set_no_context(true);
+
+        // Set initial prompt if configured
+        if let Some(prompt) = &self.initial_prompt {
+            params.set_initial_prompt(prompt);
+            tracing::debug!("Using initial prompt: {:?}", prompt);
+        }
+
+        // Single-segment mode is faster for normal short dictation, but when
+        // retrying a degenerate decode, let Whisper segment normally.
+        if duration_secs < 30.0 && !retry {
+            params.set_single_segment(true);
+        }
+
+        // Context-window reduction speeds up the normal path. Keep retries at
+        // the model's default context so a too-small window cannot repeat the
+        // same degenerate output.
+        if self.context_window_optimization && !retry {
+            if let Some(audio_ctx) = calculate_audio_ctx(duration_secs) {
+                params.set_audio_ctx(audio_ctx);
+                tracing::info!(
+                    "Audio context optimization: using audio_ctx={} for {:.2}s clip",
+                    audio_ctx,
+                    duration_secs
+                );
+            }
+        }
+
+        params
+    }
+
+    fn run_full(
+        &self,
+        samples: &[f32],
+        selected_language: Option<&str>,
+        duration_secs: f32,
+        retry: bool,
+    ) -> Result<String, TranscribeError> {
+        let mut state = self
+            .ctx
+            .create_state()
+            .map_err(|e| TranscribeError::InferenceFailed(e.to_string()))?;
+        let params = self.build_params(selected_language, duration_secs, retry);
+
+        state
+            .full(params, samples)
+            .map_err(|e| TranscribeError::InferenceFailed(e.to_string()))?;
+
+        let mut text = String::new();
+        for segment in state.as_iter() {
+            text.push_str(
+                segment
+                    .to_str()
+                    .map_err(|e| TranscribeError::InferenceFailed(e.to_string()))?,
+            );
+        }
+
+        Ok(text.trim().to_string())
     }
 
     /// Select the best language from allowed languages using Whisper's language detection.
@@ -170,71 +272,37 @@ impl Transcriber for WhisperTranscriber {
             Some(lang)
         };
 
-        // Configure parameters
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-
-        // Set language
-        match &selected_language {
-            Some(lang) => params.set_language(Some(lang)),
-            None => params.set_language(None),
+        // Record the language for output methods that benefit from a layout
+        // hint (e.g. eitype --layout, dotool DOTOOL_XKB_LAYOUT). See
+        // `Transcriber::last_detected_language`. Unconstrained auto-detect
+        // leaves this as `None`; whisper-rs does not expose the language
+        // chosen inside `full()` so we cannot recover it after the fact.
+        if let Ok(mut guard) = self.last_language.lock() {
+            *guard = selected_language.clone();
         }
 
-        params.set_translate(self.translate);
-        params.set_n_threads(self.threads as i32);
+        let mut result =
+            self.run_full(samples, selected_language.as_deref(), duration_secs, false)?;
 
-        // Disable output we don't need
-        params.set_print_special(false);
-        params.set_print_progress(false);
-        params.set_print_realtime(false);
-        params.set_print_timestamps(false);
-
-        // Improve transcription quality
-        params.set_suppress_blank(true);
-        params.set_suppress_nst(true);
-
-        // Set initial prompt if configured
-        if let Some(prompt) = &self.initial_prompt {
-            params.set_initial_prompt(prompt);
-            tracing::debug!("Using initial prompt: {:?}", prompt);
-        }
-
-        // For short recordings, use single segment mode
-        if duration_secs < 30.0 {
-            params.set_single_segment(true);
-        }
-
-        // Optimize context window for short clips
-        if self.context_window_optimization {
-            // Prevent hallucination/looping by not conditioning on previous text
-            // This is especially important for short clips where Whisper can repeat itself
-            params.set_no_context(true);
-
-            if let Some(audio_ctx) = calculate_audio_ctx(duration_secs) {
-                params.set_audio_ctx(audio_ctx);
-                tracing::info!(
-                    "Audio context optimization: using audio_ctx={} for {:.2}s clip",
-                    audio_ctx,
-                    duration_secs
+        if duration_secs >= 1.0 && is_degenerate_transcript(&result) {
+            tracing::warn!(
+                "Whisper returned degenerate transcript {:?} for {:.2}s audio; retrying with beam search",
+                result,
+                duration_secs
+            );
+            let retry_result =
+                self.run_full(samples, selected_language.as_deref(), duration_secs, true)?;
+            if is_degenerate_transcript(&retry_result) {
+                tracing::warn!(
+                    "Whisper retry also returned degenerate transcript {:?}; treating as empty",
+                    retry_result
                 );
+                result.clear();
+            } else {
+                tracing::info!("Whisper retry recovered transcript");
+                result = retry_result;
             }
         }
-
-        // Run inference
-        state
-            .full(params, samples)
-            .map_err(|e| TranscribeError::InferenceFailed(e.to_string()))?;
-
-        // Collect all segments using iterator API
-        let mut text = String::new();
-        for segment in state.as_iter() {
-            text.push_str(
-                segment
-                    .to_str()
-                    .map_err(|e| TranscribeError::InferenceFailed(e.to_string()))?,
-            );
-        }
-
-        let result = text.trim().to_string();
 
         tracing::info!(
             "Transcription completed in {:.2}s: {:?}",
@@ -248,6 +316,19 @@ impl Transcriber for WhisperTranscriber {
 
         Ok(result)
     }
+
+    fn last_detected_language(&self) -> Option<String> {
+        self.last_language.lock().ok().and_then(|g| g.clone())
+    }
+}
+
+fn is_degenerate_transcript(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+
+    !trimmed.chars().any(|c| c.is_alphanumeric())
 }
 
 /// Resolve model name to file path
@@ -447,5 +528,19 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_degenerate_transcript_detection() {
+        assert!(is_degenerate_transcript(""));
+        assert!(is_degenerate_transcript("   "));
+        assert!(is_degenerate_transcript("-"));
+        assert!(is_degenerate_transcript(" - \n"));
+        assert!(is_degenerate_transcript("..."));
+        assert!(is_degenerate_transcript("—"));
+
+        assert!(!is_degenerate_transcript("- Implement phase 1"));
+        assert!(!is_degenerate_transcript("hello"));
+        assert!(!is_degenerate_transcript("123"));
     }
 }

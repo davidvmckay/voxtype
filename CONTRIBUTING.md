@@ -48,25 +48,57 @@ cargo run -- -vv
 - Add tests for new functionality
 - Update documentation as needed
 
+### Local pre-push smoke
+
+Run this before pushing a branch. It mirrors the parallel jobs that feed the
+`ci-success` aggregator and catches the common failures locally:
+
+```bash
+cargo fmt && cargo clippy --all-targets --no-deps -- -D warnings && cargo test
+```
+
+If any step fails, fix it before pushing. CI runs the same checks and will
+block the merge otherwise.
+
+## Branching
+
+Voxtype uses a three-branch flow:
+
+1. `dev` is the default branch and the base for all PRs. Day-to-day work
+   merges here once `ci-success` passes.
+2. `rc/x.y.z` branches are cut from `dev` for release candidates. Pushing to
+   an `rc/*` branch triggers the full build matrix (Linux variants and macOS).
+3. `main` only receives merges from a green `rc/x.y.z` branch and is tagged
+   `vX.Y.Z` at release time.
+
+Branch protection requires:
+
+- `dev`: the `ci-success` aggregator check (which depends on the parallel
+  `fmt`, `clippy`, and `test` jobs).
+- `main`: `ci-success`, `linux-ci-success`, and `macos-ci-success`.
+
+Open PRs against `dev`. Draft PRs are encouraged while CI is red; mark Ready
+for Review once `ci-success` is green.
+
 ## Submitting Changes
 
 ### For Bug Fixes
 
 1. Create an issue describing the bug
 2. Fork the repository
-3. Create a branch: `git checkout -b fix/description`
+3. Create a branch from `dev`: `git checkout -b fix/description origin/dev`
 4. Make your fix
-5. Test thoroughly
-6. Submit a pull request referencing the issue
+5. Test thoroughly (run the local pre-push smoke above)
+6. Submit a pull request against `dev` referencing the issue
 
 ### For Features
 
 1. Open an issue to discuss the feature first
 2. Wait for feedback before investing significant time
-3. Fork and create a branch: `git checkout -b feature/description`
+3. Fork and create a branch from `dev`: `git checkout -b feature/description origin/dev`
 4. Implement the feature
 5. Add tests and documentation
-6. Submit a pull request
+6. Submit a pull request against `dev`
 
 ### Commit Messages
 
@@ -82,6 +114,36 @@ Fixes #123
 ```
 
 Types: `fix`, `feat`, `docs`, `style`, `refactor`, `test`, `chore`
+
+## Refactoring while contributing
+
+If you're already inside a file to fix a bug or add a feature, it's fine to
+clean up what you're touching. The rules are short.
+
+Stay inside the files your change already touches. If you notice something
+ugly in a neighbouring module, open an issue and link it from your PR; don't
+expand the diff. Adjacent cleanup is how PRs grow until they don't ship.
+
+Wait for the third call site before extracting a helper. Two might be a
+coincidence. The same shape happening to recur in places that answer
+different questions is also a coincidence; don't merge those. Genuine
+duplication of a fact across files (the same name spelled out repeatedly, the
+same parse logic copy-pasted) is the case worth fixing.
+
+Put the cleanup in its own commit, separate from the behaviour change. It
+makes the PR easier to review and easier to revert in pieces if needed. If
+you're refactoring something with no test coverage, write a small test that
+pins current behaviour before you change anything.
+
+If your cleanup is going to add more than half a day of work, stop and split.
+Ship the feature; do the refactor as a follow-up PR. Don't invent abstractions
+for a single implementation, and don't split a file just because it's long.
+File splits and other structural decisions are
+[the maintainer's call](docs/REFACTORING.md).
+
+If you're not sure whether a cleanup belongs in your PR, ask in the
+description before doing it. Skipping a refactor is always cheaper than
+reverting one.
 
 ## Code of Conduct
 

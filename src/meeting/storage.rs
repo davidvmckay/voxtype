@@ -53,9 +53,7 @@ impl Default for StorageConfig {
 impl StorageConfig {
     /// Get the default storage path
     pub fn default_storage_path() -> PathBuf {
-        directories::ProjectDirs::from("", "", "voxtype")
-            .map(|dirs| dirs.data_dir().join("meetings"))
-            .unwrap_or_else(|| PathBuf::from("~/.local/share/voxtype/meetings"))
+        crate::config::Config::data_dir().join("meetings")
     }
 
     /// Get the database path
@@ -899,7 +897,7 @@ mod tests {
 
     #[test]
     fn test_create_meeting_creates_directory() {
-        let (storage, temp) = create_test_storage();
+        let (storage, _temp) = create_test_storage();
         let metadata = MeetingMetadata::new(Some("Dir Test".to_string()));
         let path = storage.create_meeting(&metadata).unwrap();
         assert!(path.exists());

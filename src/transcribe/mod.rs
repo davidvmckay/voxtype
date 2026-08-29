@@ -13,10 +13,16 @@
 //! - Optionally Omnilingual via ONNX Runtime (when `omnilingual` feature is enabled)
 
 pub mod cli;
+#[cfg(feature = "parakeet")]
+pub mod parakeet_streaming;
 pub mod remote;
+pub mod soniox;
+pub mod streaming;
 pub mod subprocess;
 pub mod whisper;
 pub mod worker;
+
+pub use streaming::{SegmentId, StreamHandle, StreamingEvent, StreamingTranscriber};
 
 /// Shared log-mel filterbank feature extraction for ONNX-based ASR engines
 #[cfg(any(
@@ -24,8 +30,13 @@ pub mod worker;
     feature = "paraformer",
     feature = "dolphin",
     feature = "omnilingual",
+    feature = "cohere",
 ))]
 pub mod fbank;
+
+/// Shared GPU execution-provider registration for ONNX-based engines.
+#[cfg(feature = "onnx-common")]
+pub mod onnx_ep;
 
 /// Shared CTC greedy decoder for CTC-based ASR engines
 #[cfg(any(
@@ -33,6 +44,7 @@ pub mod fbank;
     feature = "paraformer",
     feature = "dolphin",
     feature = "omnilingual",
+    feature = "cohere",
 ))]
 pub mod ctc;
 
@@ -53,6 +65,15 @@ pub mod dolphin;
 
 #[cfg(feature = "omnilingual")]
 pub mod omnilingual;
+
+/// Cohere Transcribe backend (proof-of-concept, not wired into factory/CLI/config).
+/// See `src/transcribe/cohere.rs` for usage.
+#[cfg(feature = "cohere")]
+pub mod cohere;
+
+/// Cohere-specific log-mel feature extractor (NeMo conventions, 128 mels).
+#[cfg(feature = "cohere")]
+pub mod cohere_fbank;
 
 use crate::config::{Config, TranscriptionEngine, WhisperConfig, WhisperMode};
 use crate::error::TranscribeError;
@@ -101,6 +122,32 @@ pub trait Transcriber: Send + Sync {
     fn prepare(&self) {
         // Default: no-op
     }
+
+    /// Streaming-capable view of this transcriber, if it supports streaming.
+    ///
+    /// Returns `None` by default. Streaming-capable backends override this to
+    /// return `Some(self)` (or some other implementor of [`StreamingTranscriber`]).
+    /// The daemon consults this when `[transcribe] streaming = true` is set in
+    /// config to decide between batch and streaming pipelines.
+    fn as_streaming(&self) -> Option<&dyn StreamingTranscriber> {
+        None
+    }
+
+    /// Two-letter language code detected (or selected) for the most recent
+    /// transcription, if the backend tracks it.
+    ///
+    /// This is used by output methods that benefit from a layout hint
+    /// (notably [`crate::output::eitype::EitypeOutput`] and
+    /// [`crate::output::dotool::DotoolOutput`]). It is set by backends with
+    /// language auto-detection or explicit single-language mode; backends
+    /// without language awareness return `None`.
+    ///
+    /// The default implementation returns `None`. Backends override this when
+    /// they track the language used for the previous call to
+    /// [`Self::transcribe`].
+    fn last_detected_language(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Factory function to create transcriber based on configured engine
@@ -114,9 +161,15 @@ pub fn create_transcriber(config: &Config) -> Result<Box<dyn Transcriber>, Trans
                     "Parakeet engine selected but [parakeet] config section is missing".to_string(),
                 )
             })?;
-            Ok(Box::new(parakeet::ParakeetTranscriber::new(
-                parakeet_config,
-            )?))
+            if parakeet_config.streaming {
+                Ok(Box::new(
+                    parakeet_streaming::ParakeetStreamingTranscriber::new(parakeet_config)?,
+                ))
+            } else {
+                Ok(Box::new(parakeet::ParakeetTranscriber::new(
+                    parakeet_config,
+                )?))
+            }
         }
         #[cfg(not(feature = "parakeet"))]
         TranscriptionEngine::Parakeet => Err(TranscribeError::InitFailed(
@@ -201,6 +254,28 @@ pub fn create_transcriber(config: &Config) -> Result<Box<dyn Transcriber>, Trans
             "Omnilingual engine requested but voxtype was not compiled with --features omnilingual"
                 .to_string(),
         )),
+        #[cfg(feature = "cohere")]
+        TranscriptionEngine::Cohere => {
+            let cfg = config.cohere.as_ref().ok_or_else(|| {
+                TranscribeError::InitFailed(
+                    "Cohere engine selected but [cohere] config section is missing".to_string(),
+                )
+            })?;
+            Ok(Box::new(cohere::CohereTranscriber::new(cfg)?))
+        }
+        #[cfg(not(feature = "cohere"))]
+        TranscriptionEngine::Cohere => Err(TranscribeError::InitFailed(
+            "Cohere engine requested but voxtype was not compiled with --features cohere"
+                .to_string(),
+        )),
+        TranscriptionEngine::Soniox => {
+            let cfg = config.soniox.as_ref().ok_or_else(|| {
+                TranscribeError::InitFailed(
+                    "Soniox engine selected but [soniox] config section is missing".to_string(),
+                )
+            })?;
+            Ok(Box::new(soniox::SonioxTranscriber::new(cfg.clone())?))
+        }
     }
 }
 

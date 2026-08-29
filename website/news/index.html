@@ -75,6 +75,487 @@
     <main class="news-content">
         <div class="container">
 
+            <!-- v0.7.x Era Posts -->
+
+            <article class="news-article" id="v075">
+                <div class="article-meta">
+                    <time datetime="2026-05-28">May 28, 2026</time>
+                    <span class="article-tag">Release</span>
+                </div>
+                <h2>v0.7.5: Quickshell OSD, Soniox streaming, meeting-mode rework</h2>
+                <div class="article-body">
+                    <p>A larger feature release that bundles work queued behind three hotfix cycles. Three themes: an opt-in Quickshell OSD frontend, a Soniox cloud streaming backend, and a rebuild of meeting mode around source diarization. Release artifacts are now signed end-to-end in CI by a dedicated release key, removing the manual signing step from every cut.</p>
+
+                    <h3>Quickshell OSD frontend (opt-in)</h3>
+                    <p>A QML-native on-screen display that replaces the GTK4 surface for users who already run a Quickshell-based desktop. Three composed surfaces ship with the package: a waveform overlay during recording, an engine picker overlay for switching transcription backends without leaving the keyboard, and a meeting controls overlay for starting and stopping meeting captures. A new <code>voxtype-audio-bridge</code> sidecar streams audio levels to the QML side as NDJSON over a UNIX socket.</p>
+
+                    <p><strong>Why use it:</strong> if you already run Quickshell, the OSD blends into your existing shell instead of pulling in a GTK4 surface. The QML stack composes with Hyprland / Niri layer-shell rules cleanly, and the waveform renders at full compositor refresh rate.</p>
+
+                    <div class="code-block">
+                        <div class="code-header"><span>config.toml</span></div>
+                        <pre><code>[osd]
+frontend = "quickshell"</code></pre>
+                    </div>
+
+                    <p>The default frontend stays <code>gtk4</code>. Run <code>voxtype setup quickshell</code> to install the QML files and the sidecar binary into the right Quickshell config paths. Known issue: the Quickshell overlay captures pointer events across the whole screen (<a href="https://github.com/peteonrails/voxtype/issues/440">#440</a>). v0.7.6 will fix.</p>
+
+                    <h3>Soniox cloud streaming backend (<a href="https://github.com/peteonrails/voxtype/issues/411">#411</a>)</h3>
+                    <p>A new engine that streams audio over a WebSocket to Soniox and types each partial transcript at the cursor as it arrives. Lower end-to-end latency than the local Parakeet streaming pipeline, at the cost of network dependence and a third-party API key.</p>
+
+                    <p><strong>Why use it:</strong> the lowest-latency option when you can tolerate cloud transcription. Good for live captioning, long-form interview dictation, or any case where the half-second cost of local Parakeet streaming feels too long.</p>
+
+                    <div class="code-block">
+                        <div class="code-header"><span>config.toml</span></div>
+                        <pre><code>engine = "soniox"
+
+[soniox]
+api_key = "your-soniox-api-key"</code></pre>
+                    </div>
+
+                    <h3>Meeting mode: source diarization and VAD sub-windows</h3>
+                    <p>Three changes converge: a source-diarization path that attributes each speaker by which input device they came from (<a href="https://github.com/peteonrails/voxtype/issues/341">#341</a>, contributed by sjug), VAD sub-windows that let the ECAPA-TDNN ML diarizer run on shorter chunks for better turn-by-turn accuracy (<a href="https://github.com/peteonrails/voxtype/issues/418">#418</a>), and a per-meeting <code>--diarization</code> CLI flag so you can switch backends without editing the config file (<a href="https://github.com/peteonrails/voxtype/issues/420">#420</a>).</p>
+
+                    <p><strong>Why use it:</strong> meetings with a clear host-plus-remote structure (loopback for remote audio, mic for the host) now get correct speaker labels without any ML cost. The per-meeting flag means you can run one meeting with full ML diarization and the next with cheap source diarization without restarting the daemon.</p>
+
+                    <div class="code-block">
+                        <div class="code-header"><span>per-meeting override</span></div>
+                        <pre><code><span class="comment"># Source-based (fast, works when speakers are on different input devices)</span>
+voxtype meeting start --diarization source
+
+<span class="comment"># ML-based (slower, works on a single mixed audio stream)</span>
+voxtype meeting start --diarization ml</code></pre>
+                    </div>
+
+                    <h3>Release signing migrated to a dedicated CI key (<a href="https://github.com/peteonrails/voxtype/issues/437">#437</a>)</h3>
+                    <p>Every release artifact (binaries, companion <code>.so</code> files, <code>SHA256SUMS.txt</code>, <code>.deb</code>, <code>.rpm</code>, and the GitHub source archive) is now signed in CI by a dedicated release primary key (<code>9CCF7915...</code>) that is cross-signed by the offline maintainer key. Both fingerprints are in <code>voxtype-bin</code>'s <code>validpgpkeys</code>, so <code>yay</code> auto-fetches the new key from a keyserver on first upgrade with no manual <code>gpg --recv-keys</code> step.</p>
+
+                    <p><strong>Why this matters:</strong> v0.7.4 used a back-signed signing subkey that <code>yay</code> could not auto-fetch by keyid, which broke <code>yay -Syu voxtype-bin</code> for every user with a stale local keyring. v0.7.5's standalone primary keyserver-resolves correctly on every keyserver implementation. The signing step itself is also now fully in CI, removing the maintainer-laptop step between tag and release.</p>
+
+                    <h3>Variant safety improvements</h3>
+                    <p>Two changes around the <code>/usr/bin/voxtype</code> dispatcher wrapper:</p>
+                    <ul>
+                        <li><strong>Wrapper decision uses basename, not canonicalize</strong> (<a href="https://github.com/peteonrails/voxtype/issues/443">#443</a>). The previous logic followed symlinks and could pick the wrong dispatch shape when <code>/usr/bin/voxtype</code> already pointed at a non-canonical path. Closed-set basename match is more reliable and doesn't depend on filesystem state.</li>
+                        <li><strong>TUI surfaces engine-vs-binary mismatch</strong> (<a href="https://github.com/peteonrails/voxtype/issues/450">#450</a>). A persistent banner appears across every section when the configured engine cannot be served by the running binary. <code>F2</code> jumps to the General section's variant picker. The daemon also fires a desktop notification at startup so users who do not open the TUI still see the warning.</li>
+                    </ul>
+
+                    <h3>Smaller fixes</h3>
+                    <ul>
+                        <li>Streaming Parakeet validator accepts the <code>bobNight</code> naming convention (closes the v0.7.4 known issue).</li>
+                        <li>Per-language XKB variants for <code>eitype</code> (<a href="https://github.com/peteonrails/voxtype/issues/424">#424</a>, contributed by AlexCzar).</li>
+                        <li>Cohere ONNX remote-path prefix fix for the new <code>onnx/</code> subdirectory layout (<a href="https://github.com/peteonrails/voxtype/issues/363">#363</a>, contributed by jpds).</li>
+                        <li>CPU <code>__cpuid</code> wrapped in <code>unsafe</code> block for rustc 1.91+ (<a href="https://github.com/peteonrails/voxtype/issues/419">#419</a>, contributed by materemias).</li>
+                        <li>NixOS CI workflow now builds on every PR (closes <a href="https://github.com/peteonrails/voxtype/issues/369">#369</a>).</li>
+                        <li><code>wl-copy</code> fallback under X11 sessions (<a href="https://github.com/peteonrails/voxtype/issues/346">#346</a>).</li>
+                        <li><code>dotool</code> daemon fast path (<a href="https://github.com/peteonrails/voxtype/issues/410">#410</a>).</li>
+                        <li>Audio socket listener watchdog (<a href="https://github.com/peteonrails/voxtype/issues/391">#391</a>, <a href="https://github.com/peteonrails/voxtype/issues/392">#392</a>).</li>
+                    </ul>
+
+                    <h3>Acknowledgments</h3>
+                    <ul>
+                        <li><strong>sjug</strong> for the source-diarization patch (<a href="https://github.com/peteonrails/voxtype/issues/341">#341</a>).</li>
+                        <li><strong>AlexCzar</strong> for the per-language XKB variants (<a href="https://github.com/peteonrails/voxtype/issues/424">#424</a>).</li>
+                        <li><strong>jpds</strong> for the Cohere ONNX path fix (<a href="https://github.com/peteonrails/voxtype/issues/363">#363</a>).</li>
+                        <li><strong>materemias</strong> for the rustc 1.91 <code>__cpuid</code> fix (<a href="https://github.com/peteonrails/voxtype/issues/419">#419</a>).</li>
+                    </ul>
+
+                    <h3>Downloads</h3>
+                    <p>Full changelog, signed binaries, and SHA256 sums: <a href="https://github.com/peteonrails/voxtype/releases/tag/v0.7.5">v0.7.5 on GitHub</a>.</p>
+                </div>
+            </article>
+
+            <article class="news-article" id="v073">
+                <div class="article-meta">
+                    <time datetime="2026-05-19">May 19, 2026</time>
+                    <span class="article-tag">Release</span>
+                </div>
+                <h2>v0.7.3: Kaby Lake Vulkan SIGILL fix, RTX 5090 Blackwell support</h2>
+                <div class="article-body">
+                    <p>A two-issue hotfix. The Vulkan binary regression came in via the move to GitHub-hosted CI runners; the CUDA 13 issue surfaced once RTX 5090 owners hit a transcription. Both fixes also harden the build pipeline so the same class of regression cannot ship again.</p>
+
+                    <h3>Vulkan binary works on Kaby Lake and older Intel CPUs (<a href="https://github.com/peteonrails/voxtype/issues/393">#393</a>)</h3>
+                    <p>The v0.7.2 Vulkan binary failed with SIGILL on Intel CPUs that lack SSE4a, including the i7-7700HQ in the reporter's machine. The instruction came from <code>RUSTFLAGS="-C target-cpu=native"</code> in <code>Dockerfile.vulkan</code>. That flag was safe when the build host was a pre-AVX-512 Coffee Lake server, but the v0.7.2 pipeline moved onto GitHub's <code>ubuntu-24.04</code> runner, which is AMD Zen 3 and has SSE4a. The compiler emitted <code>insertq</code> instructions, and Intel CPUs SIGILL on those.</p>
+
+                    <p><strong>Why use it:</strong> if you have a pre-Cascade-Lake Intel CPU (anything roughly 6th-gen or older) and the Vulkan backend, voxtype 0.7.2 daemons would not start. v0.7.3 boots cleanly on the same hardware.</p>
+
+                    <p>The build now bounds Rust at <code>target-cpu=haswell</code> with <code>-sse4a,-gfni,-avxvnni</code> disables, matches the ggml CMake flags to the same floor, and adds a CI gate that fails the build on any AVX-512 EVEX, GFNI, AVX-VNNI, or SSE4a instruction in the AVX2 or Vulkan variants. The previous gate only checked <code>zmm</code> registers, so SSE4a slipped through unnoticed.</p>
+
+                    <h3>NVIDIA Blackwell (RTX 5090) works on the CUDA 13 binary (<a href="https://github.com/peteonrails/voxtype/issues/386">#386</a>)</h3>
+                    <p><code>voxtype-onnx-cuda-13</code> shipped a CUDA execution provider with kernel coverage up to sm_90a (Hopper). Blackwell needs sm_120, so the RTX 5090 hit the EP and got <code>cudaErrorNoKernelImageForDevice</code> on every transcription. The upstream prebuilt ORT that the <code>ort</code> crate downloads does not include Blackwell, and the maintainer has marked Blackwell support as not planned.</p>
+
+                    <p><strong>Why use it:</strong> if you own an RTX 50-series card, voxtype 0.7.2's CUDA 13 binary would error on every transcription. v0.7.3 transcribes correctly on Blackwell.</p>
+
+                    <p><code>Dockerfile.onnx-cuda-13</code> now pulls Microsoft's official ORT 1.24.4 cu13 prebuilt and links to it with <code>ort/load-dynamic</code>. The bundled CUDA EP covers sm_70 through sm_120a. The runtime ships alongside the binary at <code>/usr/lib/voxtype/cuda-13/libonnxruntime.so.1.24.4</code> plus a <code>libonnxruntime.so</code> symlink, which is exactly where <code>ort/load-dynamic</code> looks first (relative to <code>/proc/self/exe</code>). No environment variable or LD_LIBRARY_PATH setup required.</p>
+
+                    <p>Two build gates went in alongside the fix: a check that <code>sm_120</code> markers are present in the bundled provider library, and a check that the binary did not silently fall back to static linking (which would have brought the old kernel coverage back).</p>
+
+                    <p><code>voxtype-onnx-cuda-12</code> is unchanged. Blackwell requires CUDA 13 and driver 580+, so cuda-12 users are not affected.</p>
+
+                    <h3>Acknowledgments</h3>
+                    <ul>
+                        <li><strong>Piotr Lipski</strong> for reporting the Kaby Lake Vulkan SIGILL with a complete environment dump.</li>
+                        <li><strong>tyvsmith</strong> for the RTX 5090 report including the source-build comparison that confirmed the diagnosis.</li>
+                    </ul>
+
+                    <h3>Downloads</h3>
+                    <p>Full changelog, signed binaries, and SHA256 sums: <a href="https://github.com/peteonrails/voxtype/releases/tag/v0.7.3">v0.7.3 on GitHub</a>.</p>
+                </div>
+            </article>
+
+            <article class="news-article" id="v072">
+                <div class="article-meta">
+                    <time datetime="2026-05-17">May 17, 2026</time>
+                    <span class="article-tag">Release</span>
+                </div>
+                <h2>v0.7.2: Streaming Dictation, Modifier-Release Guard, Notification Cleanup</h2>
+                <div class="article-body">
+                    <p>Live transcription appears at the cursor as you speak, modifier keys no longer collide with typed output, and Waybar gets a dedicated streaming icon. Streaming requires toggle activation, not push-to-talk.</p>
+
+                    <h3>Streaming Dictation (experimental)</h3>
+                    <p>Parakeet streaming output types text incrementally while you dictate. Powered by the <code>parakeet-rs</code> cache-aware streaming pipeline, it works with <code>parakeet-unified-en-0.6b</code> (English) and runs on CPU, NVIDIA CUDA, or AMD MIGraphX.</p>
+
+                    <p><strong>Why use it:</strong> Words appear as you speak instead of after you release a key. Useful for long-form dictation, live notes, and interactive editing where waiting for batch transcription breaks flow.</p>
+
+                    <p>Enable in the TUI Advanced section or in config:</p>
+
+                    <div class="code-block">
+                        <div class="code-header"><span>config.toml</span></div>
+                        <pre><code>engine = "parakeet"
+
+[parakeet]
+model = "parakeet-unified-en-0.6b"
+streaming = true
+
+[hotkey]
+mode = "toggle"</code></pre>
+                    </div>
+
+                    <p><strong>Streaming requires toggle activation.</strong> Push-to-talk does not work with streaming output: voxtype types characters at the cursor while you are still holding the key, and the synthetic key events from <code>wtype</code> or <code>dotool</code> clobber the held-key state tracker that Hyprland, Sway, and River use through libinput. After a few seconds the compositor decides the key was already released, so the actual release event never fires and the daemon stays in streaming mode.</p>
+
+                    <p>Toggle activation sidesteps the issue entirely: no key is held during the session. The daemon emits a strong warning and auto-promotes <code>push_to_talk</code> to <code>toggle</code> for the running session when streaming is enabled, and the TUI rewrites the config to match.</p>
+
+                    <p>Tunable parameters control the latency/accuracy tradeoff:</p>
+
+                    <div class="code-block">
+                        <div class="code-header"><span>config.toml</span></div>
+                        <pre><code>[parakeet]
+streaming_chunk_secs = 0.32         # how often partials are emitted
+streaming_left_context_secs = 5.6   # history fed to each chunk
+streaming_right_context_secs = 0.32 # lookahead per chunk</code></pre>
+                    </div>
+
+                    <h3>Modifier-Release Guard (<a href="https://github.com/peteonrails/voxtype/issues/350">#350</a>)</h3>
+                    <p>When you bind voxtype to a chord like <code>Super+Ctrl+X</code>, the modifiers stay physically pressed while wtype types the transcription. On some compositors this caused the first typed letter to combine with the modifiers and fire an unrelated keybinding (closing windows, switching workspaces, opening menus).</p>
+
+                    <p>The daemon now takes an <code>EVIOCGKEY</code> snapshot of keyboard state via evdev before typing output, and waits for any held modifier to be released before sending keystrokes. If the timeout is hit (default 750ms) the output falls back to clipboard so the transcription is not lost, and a desktop notification tells the user where the text went.</p>
+
+                    <p><strong>Why use it:</strong> No more "voxtype just closed my window" surprises after a long dictation. Works on Hyprland, Sway, River, and any compositor-agnostic setup where the user is in the <code>input</code> group.</p>
+
+                    <div class="code-block">
+                        <div class="code-header"><span>config.toml</span></div>
+                        <pre><code>[output]
+wait_for_modifier_release = true     # default when input group is available
+modifier_release_timeout_ms = 750</code></pre>
+                    </div>
+
+                    <p>Disabled automatically during streaming (your modifiers are still down because you are still actively dictating; the guard would never fire).</p>
+
+                    <h3>Notification Stacking (<a href="https://github.com/peteonrails/voxtype/issues/345">#345</a>)</h3>
+                    <p>Voxtype's status notifications ("Recording...", "Transcribing...", "Transcribed", "Modifier key held...") now use the <code>x-canonical-private-synchronous</code> and <code>transient</code> libnotify hints, so a compositor with a notification daemon (mako, dunst, GNOME Shell, KDE) overwrites the previous Voxtype notification in place instead of stacking them in the notification history.</p>
+
+                    <p><strong>Why use it:</strong> The notification panel stays clean on GNOME/Ubuntu and similar setups instead of accumulating a long trail of "Recording..." / "Transcribing..." / "Transcribed" entries every time you dictate.</p>
+
+                    <p>Patch contributed by Stephan Schuster.</p>
+
+                    <h3>Streaming Status Icon</h3>
+                    <p>Waybar status followers now distinguish "recording" (batch capture) from "streaming" (live capture with cursor output). Custom themes can override the streaming glyph via <code>[status.icons]</code>:</p>
+
+                    <div class="code-block">
+                        <div class="code-header"><span>config.toml</span></div>
+                        <pre><code>[status.icons]
+streaming = "&#xf071f;"  # nf-md-radio-handheld in Nerd Font</code></pre>
+                    </div>
+
+                    <p>The built-in themes (omarchy, nerd-font, material, phosphor, codicons, emoji, minimal, dots, arrows, text) each ship a sensible streaming glyph. The Waybar <code>format-icons</code> map has a new <code>"streaming"</code> key. The omarchy-voxtype-status script reports the new state.</p>
+
+                    <h3>Bug Fixes</h3>
+                    <ul>
+                        <li><strong>Streaming cursor protection:</strong> the parakeet backend used to emit one last <code>Final</code> event after <code>SIGUSR2</code>, which would type into whichever window had focus by the time the event arrived. The daemon now disowns the streaming session synchronously on stop so post-stop emissions are dropped instead of typed.</li>
+                        <li><strong><code>voxtype record toggle</code> during streaming:</strong> the toggle command checked for <code>"recording"</code> state only, so toggling during a streaming session would send <code>SIGUSR1</code> and start a second concurrent session instead of stopping the first. Both <code>"recording"</code> and <code>"streaming"</code> are now treated as active states.</li>
+                        <li><strong>Cohere model validator:</strong> updated to match HuggingFace Optimum filenames so <code>voxtype setup model</code> validates the Cohere variants correctly.</li>
+                        <li><strong>GTK4 OSD startup visibility:</strong> the OSD no longer flashes its chrome on the first frame at boot. Fix from Andre Silva.</li>
+                        <li><strong>Nix flake:</strong> the OSD binaries are now packaged in the flake. From Andre Silva.</li>
+                    </ul>
+
+                    <h3>Experimental aarch64 binaries</h3>
+                    <p>Two new arm64 Linux binaries land in this release: <code>aarch64-cpu</code> (the Whisper engine, equivalent to the x86_64 <code>avx2</code> variant) and <code>aarch64-onnx</code> (all ONNX engines: Parakeet, Moonshine, SenseVoice, Paraformer, Dolphin, Omnilingual, Cohere). Both are CPU-only. No CUDA or Vulkan on arm64 in this release, because the Jetson CUDA toolchain is awkward and there is no mainstream consumer arm64 hardware with Vulkan GPUs to support yet. Target hardware is Raspberry Pi 4/5, Ampere Altra servers, Snapdragon X laptops, and AWS Graviton instances. These binaries are marked experimental: nobody on the maintenance team owns arm64 hardware to smoke-test against, so users who run these and report back are the ones validating them in practice. File issues with hardware details if something breaks.</p>
+
+                    <p><strong>Manual install only in 0.7.2.</strong> The .deb / .rpm / AUR packages stay x86_64-only for this release because voxtype's installed-binary switching logic (in <code>src/setup/gpu.rs</code>) does not yet recognize arm64 variants. Download the binary directly from the GitHub release page and drop it into <code>/usr/local/bin/voxtype</code>:</p>
+
+                    <div class="code-block">
+                        <pre><code>curl -L https://github.com/peteonrails/voxtype/releases/download/v0.7.2/voxtype-0.7.2-linux-aarch64-cpu \
+  -o /usr/local/bin/voxtype
+chmod 755 /usr/local/bin/voxtype
+voxtype --version</code></pre>
+                    </div>
+
+                    <p>(Substitute <code>aarch64-onnx</code> for the ONNX-engine build.) The aarch64 binaries get full package-tooling integration in v0.7.3 alongside a chosen naming convention and <code>arch=('x86_64' 'aarch64')</code> in the PKGBUILDs.</p>
+
+                    <h3>Acknowledgments</h3>
+                    <ul>
+                        <li><strong>Andre Silva</strong> for the OSD startup-visibility fix and the Nix flake OSD packaging.</li>
+                        <li><strong>Stephan Schuster</strong> for the notification-stacking patch (#345), including the libnotify hint research and a working diff.</li>
+                        <li><strong>Jean-Paul van Tillo</strong> for early streaming feedback that informed the partial-typing implementation.</li>
+                    </ul>
+
+                    <h3>Downloads</h3>
+                    <p>Full changelog, signed binaries, and SHA256 sums: <a href="https://github.com/peteonrails/voxtype/releases/tag/v0.7.2">v0.7.2 on GitHub</a>.</p>
+                </div>
+            </article>
+
+            <article class="news-article" id="v071">
+                <div class="article-meta">
+                    <time datetime="2026-05-11">May 11, 2026</time>
+                    <span class="article-tag">Release</span>
+                </div>
+                <h2>v0.7.1: NixOS source build hotfix</h2>
+                <div class="article-body">
+                    <p>Hotfix for v0.7.0 that fixes source builds on NixOS and lands two community contributions for the Nix flake. Binary package users (AUR, .deb, .rpm) get the OSD visibility fix and flake improvements; v0.7.0 binaries already worked correctly for them.</p>
+
+                    <h3>NixOS vulkan build no longer needs GTK3 system libs</h3>
+                    <p>v0.7.0 added <code>tray-icon</code> and <code>rdev</code> as top-level Cargo dependencies. Both crates are consumed only by macOS-specific code, but because they were declared as platform-agnostic, cargo resolved and built them on every platform. <code>tray-icon</code> dragged in <code>libappindicator</code> &rarr; <code>gtk3-sys</code> &rarr; <code>glib-sys</code> &rarr; <code>gdk-pixbuf-sys</code> transitively.</p>
+
+                    <p>Docker-based binary builds happened to install the GTK3 dev stack, so they worked by accident. The NixOS vulkan derivation only declares <code>alsa-lib</code>, <code>openssl</code>, and <code>vulkan-loader</code>, so cargo died on <code>glib-sys</code> when pkg-config could not find <code>glib-2.0.pc</code>.</p>
+
+                    <p><strong>Why use it:</strong> if you build from source on any non-Arch Linux distribution and do not have the full GTK3 development stack installed, v0.7.0 would not compile and v0.7.1 will. NixOS users can drop any <code>glib</code> or <code>gdk-pixbuf</code> workarounds from their flake derivations.</p>
+
+                    <p>Reported by <a href="https://github.com/bashfulrobot">@bashfulrobot</a> in <a href="https://github.com/peteonrails/voxtype/issues/352">Issue #352</a>.</p>
+
+                    <h3>Nix flake: package OSD binaries</h3>
+                    <p>The flake now exposes <code>osdNative</code> and <code>osdGtk4</code> as build targets, so NixOS users get the on-screen visualizer through the standard <code>nix build</code> path instead of needing to build from source manually.</p>
+
+                    <div class="code-block">
+                        <pre><code>nix build github:peteonrails/voxtype#packages.x86_64-linux.osdGtk4
+nix build github:peteonrails/voxtype#packages.x86_64-linux.osdNative</code></pre>
+                    </div>
+
+                    <p>Contributed by <a href="https://github.com/andresilva">@andresilva</a> in <a href="https://github.com/peteonrails/voxtype/pull/354">PR #354</a>.</p>
+
+                    <h3>GTK4 OSD no longer stays visible on startup</h3>
+                    <p>The GTK4 visualizer's initial visibility flag did not match the real GTK state after <code>window.present()</code>, so the first idle check skipped the hide call and left the empty visualizer on screen until you started a recording. Subtle but visible if you launched <code>voxtype-osd-gtk4</code> standalone before dictating for the first time.</p>
+
+                    <p>Contributed by <a href="https://github.com/andresilva">@andresilva</a> in <a href="https://github.com/peteonrails/voxtype/pull/355">PR #355</a>.</p>
+
+                    <p>Full changelog and signed binaries: <a href="https://github.com/peteonrails/voxtype/releases/tag/v0.7.1">v0.7.1 on GitHub</a>.</p>
+                </div>
+            </article>
+
+            <article class="news-article" id="v070">
+                <div class="article-meta">
+                    <time datetime="2026-05-09">May 9, 2026</time>
+                    <span class="article-tag">Release</span>
+                </div>
+                <h2>v0.7.0: Cohere, macOS, on-screen visualizer, configuration TUI</h2>
+                <div class="article-body">
+                    <p>v0.7.0 is the largest release in the project's history. It adds Cohere Transcribe as the eighth ASR engine, brings full macOS support, ships a GTK4 on-screen visualizer that follows the swayosd convention, replaces the AMD GPU backend with MIGraphX, and introduces an interactive configuration TUI. 138 commits since v0.6.6.</p>
+
+                    <h3>Cohere Transcribe</h3>
+                    <p>The eighth transcription engine. Cohere's Transcribe model is a 1.6B-parameter multilingual ASR built on the Aya Expanse architecture. Voxtype ships int4 and fp16 quantizations downloadable via <code>voxtype setup model</code>.</p>
+
+                    <p><strong>Why use it:</strong> Best-in-class accuracy on accented English, code-switching between languages, and technical vocabulary. The int4 build is small enough to run on CPU; fp16 runs on GPU for sub-second latency.</p>
+
+                    <div class="code-block">
+                        <div class="code-header"><span>config.toml</span></div>
+                        <pre><code>engine = "cohere"
+
+[cohere]
+model = "cohere-transcribe-q4f16"</code></pre>
+                    </div>
+
+                    <p>On CUDA the encoder runs on GPU but the decoder is pinned to CPU pending an upstream ONNX Runtime fix. AMD MIGraphX users get full GPU acceleration end-to-end.</p>
+
+                    <h3>macOS support</h3>
+                    <p>Voxtype now runs on Apple Silicon. The release ships a signed <code>.dmg</code> with the daemon, a SwiftUI menubar app, and a setup wizard for accessibility permissions, model download, and the FN key hotkey.</p>
+
+                    <p><strong>Why use it:</strong> If you've been waiting for voxtype on a Mac, the wait is over. The macOS build uses Microsoft's prebuilt ONNX Runtime so all engines work, including Parakeet.</p>
+
+                    <div class="code-block">
+                        <div class="code-header"><span>Install via Homebrew</span></div>
+                        <pre><code>brew install --cask voxtype</code></pre>
+                    </div>
+
+                    <p>The macOS port was led by <a href="https://github.com/krystophny">krystophny</a>; thanks for the long arc of work to get it shipped.</p>
+
+                    <h3>On-screen visualizer</h3>
+                    <p>A new on-screen mic visualizer renders a live waveform aligned with the swayosd convention. Two frontends: GTK4 + gtk4-layer-shell, or native SCTK + wgpu + egui-wgpu. The daemon picks one based on <code>[osd] frontend</code> and spawns it automatically when the daemon starts.</p>
+
+                    <p><strong>Why use it:</strong> You know dictation is being captured without looking at the waybar. The waveform shows your voice level, fades when you stop talking, and disappears when transcription finishes.</p>
+
+                    <div class="code-block">
+                        <div class="code-header"><span>config.toml</span></div>
+                        <pre><code>[osd]
+enabled = true
+frontend = "gtk4"          # or "native"
+position = "bottom-center"
+top_margin = 0.85          # swayosd-aligned by default</code></pre>
+                    </div>
+
+                    <p>The daemon supervisor restarts the OSD on crash with exponential backoff so a misconfigured GTK theme or a Wayland reconnect doesn't lose the visualizer.</p>
+
+                    <h3>Configuration TUI</h3>
+                    <p>The new <code>voxtype configure</code> command opens an interactive terminal UI that edits every option in <code>~/.config/voxtype/config.toml</code> for you. The editor preserves comments and unknown fields via <code>toml_edit</code>, validates the result against the daemon's parser before writing, and rolls back if a change would prevent startup.</p>
+
+                    <p><strong>Why use it:</strong> Every option is discoverable. The TUI shows live state, warns when a chosen engine's binary isn't installed, and offers to download missing models or swap binary variants without leaving the editor.</p>
+
+                    <p>Search "Voxtype Configuration" in walker, fuzzel, rofi, KRunner, or GNOME Activities to launch it as a floating window. The launcher discovers an installed terminal emulator and applies a Hyprland <code>windowrulev2</code> for centered floating placement.</p>
+
+                    <h3>CUDA 12 / CUDA 13 split</h3>
+                    <p>NVIDIA users now get two ONNX binaries: <code>voxtype-onnx-cuda-12</code> (driver 525+, libcudart.so.12) and <code>voxtype-onnx-cuda-13</code> (driver 580+, libcudart.so.13). The AUR post-install hook detects your CUDA runtime via <code>ldconfig</code> and points <code>/usr/bin/voxtype</code> at the matching binary automatically.</p>
+
+                    <p><strong>Why use it:</strong> Rolling-distro users on CUDA 13 stop hitting <code>forward compatibility was attempted on non supported HW</code> errors. LTS users on CUDA 12 keep working without manually pinning a driver.</p>
+
+                    <h3>AMD: ROCm to MIGraphX</h3>
+                    <p>The AMD GPU execution provider changed. <code>parakeet-rocm</code> is now <code>parakeet-migraphx</code>, and <code>voxtype-onnx-rocm</code> is now <code>voxtype-onnx-migraphx</code>. The MIGraphX EP is built from source against ROCm 7.2.2, has better op coverage, and is the path nixpkgs is committing to.</p>
+
+                    <p><strong>Why use it:</strong> The legacy ROCm EP had upstream ORT compatibility issues that caused silent CPU fallback on Radeon RX 7000-class GPUs. MIGraphX runs Parakeet, Moonshine, SenseVoice, Cohere, and the rest of the ONNX stack with proper GPU acceleration.</p>
+
+                    <p>Three things to know:</p>
+                    <ul>
+                        <li>Requires ROCm 7.x. Older releases (5.x, 6.x) silently fall back to CPU.</li>
+                        <li>First inference compiles the model graph (~30-60s on RX 7000-class). Subsequent runs are fast.</li>
+                        <li>The <code>voxtype-onnx-rocm</code> name still works as a symlink for one release. Drop in v0.8.0.</li>
+                    </ul>
+
+                    <h3>Filler-word filtering</h3>
+                    <p>Built-in filler-word removal, on by default. Strips "um", "uh", "like", "you know", "basically", and similar fillers from transcribed text before output.</p>
+
+                    <p><strong>Why use it:</strong> Cleaner dictation without an LLM cleanup step. Combine with <code>post_process</code> for full LLM grammar fixes when you want them.</p>
+
+                    <h3>Eighth engine, eight binaries</h3>
+                    <p><strong>Engines (8):</strong> Whisper, Parakeet, Moonshine, SenseVoice, Paraformer, Dolphin, Omnilingual, Cohere<br>
+                    <strong>Binaries (8):</strong> avx2, avx512, vulkan, onnx-avx2, onnx-avx512, onnx-cuda-12, onnx-cuda-13, onnx-migraphx, plus voxtype-osd and voxtype-osd-gtk4</p>
+
+                    <p>The TUI's Engine section auto-swaps the binary when you pick an engine that the active variant doesn't support.</p>
+
+                    <h3>Other improvements</h3>
+                    <ul>
+                        <li><strong>AppImage packaging.</strong> Three variants (CPU, Vulkan, ONNX) for distros without native packages.</li>
+                        <li><strong>Niri compositor support</strong> in the supported compositor list and the TUI hotkey suggestion logic.</li>
+                        <li><strong>Wrapper script for /usr/bin/voxtype.</strong> GPU and ONNX variants now go through a wrapper that sets the right <code>argv[0]</code> for ORT's provider <code>.so</code> lookup, fixing a class of silent CPU-fallback bugs.</li>
+                        <li><strong>Mouse support and live keymap overlay (<code>?</code>) in the TUI.</strong></li>
+                        <li><strong>Configurable notification urgency</strong> per-event.</li>
+                        <li><strong>Live refresh</strong> of the General TUI section every 2 seconds while it's the active section.</li>
+                    </ul>
+
+                    <h3>Bug fixes</h3>
+                    <ul>
+                        <li>Status display now reports the real backend ("ONNX GPU (MIGraphX)") through the wrapper script. The waybar tooltip matches reality.</li>
+                        <li>TUI save no longer corrupts config files; save-on-exit prompt no longer infinite-loops on "discard".</li>
+                        <li><code>gpu_isolation</code> worker spawn moved off the async event loop so it doesn't stall hotkey detection during model load.</li>
+                        <li>ALSA stderr silenced during cpal device enumeration; daemon startup no longer prints spurious "ALSA lib pcm" warnings.</li>
+                        <li>Filler-word filter no longer strips legitimate words that contain filler substrings.</li>
+                        <li>Notification urgency level is now actually applied (was always "normal").</li>
+                        <li>TUI engine cycling correctly filters to engines the active binary supports.</li>
+                    </ul>
+
+                    <h3>Upgrading from 0.6.x</h3>
+                    <p>Most users on Arch (<code>voxtype-bin</code>), Debian (.deb), or Fedora (.rpm) will upgrade cleanly. Three things to know if you're a Parakeet user:</p>
+
+                    <p><strong>Binary renames.</strong> <code>voxtype-parakeet</code> becomes <code>voxtype-onnx-avx2</code> (or avx512). <code>voxtype-parakeet-cuda</code> becomes <code>voxtype-onnx-cuda-12</code> or <code>-13</code>. <code>voxtype-parakeet-rocm</code> becomes <code>voxtype-onnx-migraphx</code>. The AUR ships a <code>voxtype-onnx-rocm</code> compat symlink for one release. Custom user scripts hard-coding the old names will need updating.</p>
+
+                    <p><strong>MIGraphX requires ROCm 7.x.</strong> AMD users on ROCm 5.x or 6.x will silently fall back to CPU. Update to <code>rocm-hip-runtime</code> 7.x before upgrading.</p>
+
+                    <p><strong>CUDA 13 needs driver 580+.</strong> Rolling distros are usually fine. LTS users stay on cuda-12. The post-install hook picks the right binary automatically based on <code>ldconfig</code>'s libcudart SONAME.</p>
+
+                    <h3>Contributors</h3>
+                    <p>This release built on work by Peter Jackson, krystophny (macOS port), Antonio Zugaldia, and André Silva. Issue reports and design feedback from the Omarchy and Hyprland communities shaped the OSD positioning and the CUDA-12/13 split. Thanks to everyone who tested rc1, rc2, and rc3.</p>
+
+                    <p>Full changelog and signed binaries: <a href="https://github.com/peteonrails/voxtype/releases/tag/v0.7.0">v0.7.0 on GitHub</a>.</p>
+                </div>
+            </article>
+
+            <article class="news-article" id="v070rc2">
+                <div class="article-meta">
+                    <time datetime="2026-05-06">May 6, 2026</time>
+                    <span class="article-tag">Pre-release</span>
+                </div>
+                <h2>v0.7.0-rc2: Cohere Transcribe, macOS port, MIGraphX, configure TUI</h2>
+                <div class="article-body">
+                    <p>v0.7.0-rc2 is a community pre-release. It folds in three months of work across new ASR engines, an AMD GPU acceleration path, native macOS support, and a new interactive configuration TUI. Please install from the <a href="https://github.com/peteonrails/voxtype/releases/tag/v0.7.0-rc2">GitHub release</a> and report issues at <a href="https://github.com/peteonrails/voxtype/issues">github.com/peteonrails/voxtype/issues</a>.</p>
+
+                    <h3>Cohere Transcribe ASR engine</h3>
+                    <p>The Cohere Labs Transcribe model is now wired in as a first-class engine. It currently sits at #1 on the Open ASR Leaderboard. Whisper-style task tokens give it punctuation, capitalization, and inverse text normalization out of the box.</p>
+
+                    <p>This release ships four HuggingFace Optimum ONNX quantization variants. The default (<code>cohere-transcribe-q4f16</code>) is 1.5 GB and runs at 9-11x realtime on a Zen 4 CPU.</p>
+
+                    <div class="code-block">
+                        <div class="code-header"><span>Available models</span></div>
+                        <pre><code>cohere-transcribe-q4f16    1.5 GB   9-11x realtime   (default)
+cohere-transcribe-q4       2.0 GB   9-11x realtime
+cohere-transcribe-int8     2.9 GB   2-3x realtime
+cohere-transcribe-fp16     3.9 GB   7-8x realtime</code></pre>
+                    </div>
+
+                    <p><strong>Why use it:</strong> Cohere is the new top-of-the-leaderboard ASR model and we ship a 1.5 GB quantized variant that runs faster than realtime on commodity hardware. CUDA acceleration on the encoder gives a meaningful boost on longer dictations.</p>
+
+                    <h3>Native macOS port</h3>
+                    <p>Apple Silicon support via Microsoft ONNX Runtime. The macOS package includes:</p>
+                    <ul>
+                        <li>SwiftUI VoxtypeMenubar status bar app</li>
+                        <li>VoxtypeSetup wizard with sidebar settings layout</li>
+                        <li>Homebrew Cask + tap for prebuilt distribution</li>
+                        <li>FN / Globe key hotkey support</li>
+                        <li>App-bundle install path (supersedes the older launchd flow)</li>
+                    </ul>
+
+                    <p>Linux remains the primary platform. macOS arm64 ships as an additional artifact.</p>
+
+                    <p><strong>Credit:</strong> the macOS port comes from <a href="https://github.com/krystophny">krystophny</a>, who carried it from a personal fork to a release-ready feature branch.</p>
+
+                    <h3>MIGraphX for AMD GPUs</h3>
+                    <p>MIGraphX 7.2 replaces the older ROCm execution-provider path for Parakeet on AMD GPUs. Validated on Radeon RX 7000-series cards. The compatibility symlink <code>voxtype-onnx-rocm</code> ships through this release for users with scripts that reference the old name; it goes away in v0.8.0.</p>
+
+                    <p><strong>Note:</strong> MIGraphX 7.2 requires ROCm 7.x. Users on ROCm 5.x or 6.x will silently fall back to CPU. Check <code>rocm-smi</code> before upgrading if you depend on AMD GPU acceleration.</p>
+
+                    <h3>Two CUDA binaries</h3>
+                    <p>The previous single CUDA binary is now split into <code>voxtype-onnx-cuda-12</code> (NVIDIA driver 525+) and <code>voxtype-onnx-cuda-13</code> (NVIDIA driver 580+). The AUR PKGBUILD and <code>voxtype setup gpu --enable</code> symlink <code>voxtype-onnx-cuda</code> to whichever variant matches your runtime CUDA.</p>
+
+                    <p><strong>Why two:</strong> CUDA 13's runtime requires a newer NVIDIA driver than CUDA 12 does. Shipping both gives users on older drivers a working binary while still offering the latest CUDA toolchain to users on current drivers.</p>
+
+                    <h3>Interactive configure TUI</h3>
+                    <p>The new <code>voxtype configure</code> command opens an interactive terminal UI for editing every option in <code>config.toml</code>. It surfaces in Walker, fuzzel, and rofi as "Voxtype Configuration" so you can launch it from your usual app launcher.</p>
+
+                    <p>Behaviors that landed in this release:</p>
+                    <ul>
+                        <li>Engine cycle filters to engines for which an installed binary actually exists. No more saving an engine that the active binary cannot load.</li>
+                        <li>Save auto-swaps <code>/usr/bin/voxtype</code> to a binary that supports the chosen engine (via <code>pkexec</code>) and auto-downloads missing models via <code>voxtype setup model</code>.</li>
+                        <li>Save-on-exit prompt with Save / Discard / Cancel options so field edits are not lost on <code>q</code>.</li>
+                        <li><code>D</code> on the General section starts or restarts the user systemd unit so configuration changes take effect without leaving the TUI.</li>
+                    </ul>
+
+                    <p><strong>Why use it:</strong> No more hand-editing TOML. Pick an engine, pick a model, save. The TUI handles the binary swap and download orchestration so you do not end up in a broken state.</p>
+
+                    <h3>swayosd-aligned floating OSD</h3>
+                    <p>The optional waveform OSD (<code>voxtype-osd-gtk4</code>) now positions itself using fractional <code>top_margin</code> semantics that match swayosd. Default 0.85 puts the OSD in the same vertical band where your volume, brightness, and media-key feedback already render. Works across multi-monitor setups with different screen heights without per-monitor pixel tweaks.</p>
+
+                    <h3>Other changes</h3>
+                    <ul>
+                        <li>Cohere config table moved to the HuggingFace Optimum file layout. Pre-rc2 Cohere installs need to re-download via <code>voxtype setup model</code>.</li>
+                        <li>The default Cohere model is now <code>cohere-transcribe-q4f16</code> (was <code>cohere-transcribe-int8</code>).</li>
+                        <li>Status command now reports the real backend (e.g. <code>ONNX GPU (MIGraphX)</code>) through the wrapper-aware inventory machinery, rather than always showing <code>CPU (native)</code>.</li>
+                        <li>Roadmap reviewed: voxtype-models CDN and streaming transcription confirmed for v0.7.1.</li>
+                    </ul>
+
+                    <h3>Caveats for testers</h3>
+                    <ul>
+                        <li>The CUDA companion <code>.so</code> files (<code>libonnxruntime_providers_*.so</code>) must be installed in the same directory as the binary. The AUR <code>voxtype-bin</code> package handles this; manual installs need the matching layout under <code>/usr/lib/voxtype/cuda-12|cuda-13|migraphx/</code>.</li>
+                        <li>Cohere's CUDA decoder still falls through to CPU pending an ONNX Runtime kernel update. Encoder-only acceleration on this release.</li>
+                        <li>Parakeet users upgrading from 0.6.x: please read the GitHub release notes for the binary-rename and ROCm-version details.</li>
+                    </ul>
+
+                    <p>Full changelog and signed binaries: <a href="https://github.com/peteonrails/voxtype/releases/tag/v0.7.0-rc2">v0.7.0-rc2 on GitHub</a>.</p>
+                </div>
+            </article>
+
             <!-- v0.6.x Era Posts -->
 
             <article class="news-article" id="v066">

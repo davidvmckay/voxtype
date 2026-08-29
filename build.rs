@@ -9,8 +9,18 @@ use std::fs::{self, File};
 use std::io::Error;
 use std::path::PathBuf;
 
-// Include the CLI module
-include!("src/cli.rs");
+// Include the CLI module tree. The CLI lives under src/cli/, with mod.rs as
+// its entry; we attach it to the build-script's own crate via #[path] so
+// `Cli::command()` below resolves through the normal module system.
+//
+// The build script only needs `Cli` for man-page generation, but the module
+// re-exports several subcommand enums and impl methods that go with it. They
+// are intentionally unused here; suppress dead-code warnings so the build
+// script does not pollute `cargo clippy --all-targets -- -D warnings`.
+#[path = "src/cli/mod.rs"]
+#[allow(dead_code, unused_imports)]
+mod cli;
+use cli::Cli;
 
 fn main() -> Result<(), Error> {
     // Only generate man pages for release builds or when explicitly requested
@@ -58,7 +68,7 @@ fn main() -> Result<(), Error> {
     }
 
     // Tell cargo to rerun if CLI definitions change
-    println!("cargo:rerun-if-changed=src/cli.rs");
+    println!("cargo:rerun-if-changed=src/cli");
 
     // Print location of generated man pages
     println!(
@@ -66,5 +76,25 @@ fn main() -> Result<(), Error> {
         man_dir.display()
     );
 
+    expose_cuda_build_major();
+
     Ok(())
+}
+
+/// Mirror ort-sys's build-time CUDA version selection so the binary's runtime
+/// probe can reject mismatched hosts before ort attempts (and crashes on)
+/// EP registration. ort 2.0.0-rc.12 picks cu12 vs cu13 prebuilt at compile time
+/// based on the same env var; we read it here and emit a compile-time constant
+/// the parakeet code path uses to short-circuit graceful fallback.
+fn expose_cuda_build_major() {
+    println!("cargo:rerun-if-env-changed=ORT_CUDA_VERSION");
+    let major = match env::var("ORT_CUDA_VERSION").as_deref() {
+        Ok("12") => "12",
+        Ok("13") => "13",
+        // ort-sys defaults to cu12 when unset (see resolve.rs in ort-sys 2.0.0-rc.12).
+        // Match that default so a debug build without ORT_CUDA_VERSION set agrees
+        // with the bundled prebuilt.
+        _ => "12",
+    };
+    println!("cargo:rustc-env=VOXTYPE_BUILD_CUDA_MAJOR={major}");
 }

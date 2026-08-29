@@ -57,7 +57,6 @@ pub enum AudioSource {
     Unknown,
 }
 
-
 impl std::fmt::Display for AudioSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -252,8 +251,8 @@ impl Transcript {
                         break;
                     }
 
-                    for j in i..end {
-                        keep[j] = false;
+                    for entry in keep.iter_mut().take(end).skip(i) {
+                        *entry = false;
                     }
                     total_removed += end - i;
 
@@ -360,7 +359,6 @@ pub enum MeetingStatus {
     /// Meeting was cancelled/abandoned
     Cancelled,
 }
-
 
 /// Metadata for a meeting
 #[derive(Debug, Clone, Serialize, Deserialize)]

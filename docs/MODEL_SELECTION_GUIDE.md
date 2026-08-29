@@ -2,7 +2,7 @@
 
 This guide helps you choose the right transcription engine and model for voxtype v0.6.0. The choice depends on your language, hardware, and how you use dictation.
 
-Voxtype has seven transcription engines. Two are bundled with the standard binary (Whisper and Remote Whisper). The other five require the ONNX binary variant.
+Voxtype has eight transcription engines. Three ship in every binary — Whisper (local), Remote Whisper (HTTP API), and Soniox (cloud streaming). The other five require the ONNX binary variant.
 
 ---
 
@@ -17,6 +17,9 @@ Voxtype has seven transcription engines. Two are bundled with the standard binar
 | **Paraformer** | zh, en | Encoder-predictor-decoder | 220 - 487 MB | Fast | No | ONNX |
 | **Dolphin** | 40+ langs, 22 Chinese dialects | CTC E-Branchformer | 198 MB | Fast | No | ONNX |
 | **Omnilingual** | 1600+ | CTC wav2vec2 | 3.9 GB | Moderate | No | ONNX |
+| **Soniox** (cloud) | 60+ | Cloud (WebSocket / REST) | n/a (no local model) | Cloud-bound | Yes | Built-in |
+
+**Soniox** is different from the others — it's a paid cloud service over WebSocket / REST. No local model, no GPU. Sub-second partial latency. Strong for non-English languages where local Whisper-based engines struggle on lower-end hardware. Ships in every release binary; you only need a `SONIOX_API_KEY`. See [SONIOX.md](SONIOX.md) for the full story.
 
 ---
 
@@ -53,6 +56,18 @@ What language(s) do you speak?
 │
 └─ Rare or uncommon language
     └─ → Omnilingual (1600+ languages) or Whisper
+
+OR — independently of language:
+
+├─ Want sub-second live partials at the cursor?
+│   ├─ English + GPU available?           → Parakeet TDT (streaming, local)
+│   └─ Any of 60+ languages, paid OK?     → Soniox (cloud, sub-100ms partials)
+│
+├─ Want highest accuracy and don't mind a few seconds of wait?
+│   └─ Soniox async API (cloud, stt-async-v4)
+│
+└─ Cannot send audio off-device (privacy-sensitive)?
+    └─ Pick any *local* engine above. Never Soniox.
 ```
 
 ---
@@ -188,14 +203,14 @@ model = "parakeet-tdt-0.6b-v3-int8"
 - Best accuracy for English (~6% WER, top of HuggingFace ASR leaderboard)
 - Built-in punctuation and capitalization (TDT)
 - Fast even on CPU thanks to efficient FastConformer architecture
-- GPU acceleration via CUDA, ROCm, or TensorRT
+- GPU acceleration via CUDA, MIGraphX, or TensorRT
 
 **Cons:**
 - Limited to 25 European languages (no CJK, Arabic, Hindi, etc.)
 - Requires ONNX binary
 - Only one model size (0.6B parameters)
 
-**GPU builds:** The ONNX binary variants include GPU support. `onnx-cuda` for NVIDIA, `onnx-rocm` for AMD.
+**GPU builds:** The ONNX binary variants include GPU support. `onnx-cuda` for NVIDIA, `onnx-migraphx` for AMD.
 
 ---
 

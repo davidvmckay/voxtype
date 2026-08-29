@@ -395,13 +395,60 @@ if [[ "$TARGET_ARCH" == "x86_64" ]]; then
         cp "${RELEASE_DIR}/voxtype-${VERSION}-linux-x86_64-onnx-avx512" "$STAGING/usr/lib/voxtype/voxtype-onnx-avx512"
         chmod 755 "$STAGING/usr/lib/voxtype/voxtype-onnx-avx512"
     fi
-    if [[ -f "${RELEASE_DIR}/voxtype-${VERSION}-linux-x86_64-onnx-cuda" ]]; then
-        cp "${RELEASE_DIR}/voxtype-${VERSION}-linux-x86_64-onnx-cuda" "$STAGING/usr/lib/voxtype/voxtype-onnx-cuda"
-        chmod 755 "$STAGING/usr/lib/voxtype/voxtype-onnx-cuda"
-    fi
-    if [[ -f "${RELEASE_DIR}/voxtype-${VERSION}-linux-x86_64-onnx-rocm" ]]; then
-        cp "${RELEASE_DIR}/voxtype-${VERSION}-linux-x86_64-onnx-rocm" "$STAGING/usr/lib/voxtype/voxtype-onnx-rocm"
-        chmod 755 "$STAGING/usr/lib/voxtype/voxtype-onnx-rocm"
+    # GPU-accelerated ONNX binaries each live in their own subdirectory
+    # alongside the companion shared libs they dlopen at runtime.
+    # ort 2.0.0-rc.12's CUDA/MIGraphX EPs dlopen libonnxruntime_providers_*.so
+    # and libonnxruntime_providers_shared.so based on the binary's own
+    # /proc/self/exe location; if they aren't co-located, EP registration
+    # fails and ort silently falls back to CPU.
+    #
+    # User-facing names at /usr/lib/voxtype/voxtype-onnx-* are symlinks into
+    # these subdirs. /proc/self/exe resolves the real path, so the .so files
+    # are found correctly even when invoked through a symlink.
+    install_onnx_gpu_variant() {
+        local variant="$1"      # cuda-12, cuda-13, migraphx
+        local ep_lib="$2"       # cuda or migraphx
+        # When set, $3 is the libonnxruntime.so.X.Y.Z basename the variant
+        # bundles alongside the binary. The cuda-13 build links ORT
+        # dynamically (load-dynamic) because Microsoft's prebuilt is the
+        # only ORT 1.24.4 build that ships Blackwell sm_120 kernels, and
+        # Microsoft only distributes .so (no .a). cuda-12 and migraphx
+        # keep their static-linked layouts; pass empty for those.
+        local libort_versioned="${3:-}"
+        local src="${RELEASE_DIR}/voxtype-${VERSION}-linux-x86_64-onnx-${variant}"
+        if [[ ! -f "$src" ]]; then
+            return 0
+        fi
+        local subdir="$STAGING/usr/lib/voxtype/${variant}"
+        mkdir -p "$subdir"
+        cp "$src" "$subdir/voxtype-onnx-${variant}"
+        chmod 755 "$subdir/voxtype-onnx-${variant}"
+        cp "${src}.libonnxruntime_providers_${ep_lib}.so" \
+            "$subdir/libonnxruntime_providers_${ep_lib}.so"
+        cp "${src}.libonnxruntime_providers_shared.so" \
+            "$subdir/libonnxruntime_providers_shared.so"
+        if [[ -n "$libort_versioned" ]]; then
+            # Real file + symlink. ort/load-dynamic dlopens the unversioned
+            # name (`libonnxruntime.so`) relative to /proc/self/exe (see
+            # ort src/lib.rs:96-109); the SONAME symlink lets that resolve
+            # without env vars or RPATH plumbing.
+            cp "${src}.${libort_versioned}" "$subdir/${libort_versioned}"
+            ln -sf "${libort_versioned}" "$subdir/libonnxruntime.so"
+        fi
+        # Convenience symlink at the top level so existing tooling (the
+        # voxtype-wrapper.sh, voxtype setup gpu, ParakeetBackend detection)
+        # finds the binary by its short name.
+        ln -sf "${variant}/voxtype-onnx-${variant}" \
+            "$STAGING/usr/lib/voxtype/voxtype-onnx-${variant}"
+    }
+    install_onnx_gpu_variant cuda-12 cuda
+    install_onnx_gpu_variant cuda-13 cuda libonnxruntime.so.1.24.4
+    install_onnx_gpu_variant migraphx migraphx
+    # Legacy compat symlink for users with scripts referencing the old
+    # voxtype-onnx-rocm name. The AMD GPU EP changed from ROCm to MIGraphX
+    # in v0.7.0; ship one release with both names. Drop in v0.8.0.
+    if [[ -L "$STAGING/usr/lib/voxtype/voxtype-onnx-migraphx" ]]; then
+        ln -sf migraphx/voxtype-onnx-migraphx "$STAGING/usr/lib/voxtype/voxtype-onnx-rocm"
     fi
 
     # Install wrapper script as /usr/bin/voxtype
@@ -416,10 +463,64 @@ else
     cp "${SCRIPT_DIR}/voxtype-wrapper.sh" "$STAGING/usr/bin/voxtype"
     chmod 755 "$STAGING/usr/bin/voxtype"
 fi
+# OSD frontends and the audio-bridge sidecar. Dockerfile.onnx builds these
+# four alongside the onnx-avx2 binary and they ship as their own release
+# assets, but until v0.7.6 the deb/rpm never installed them, so
+# `voxtype setup quickshell` could not find the bridge and the OSD stayed
+# empty for package users (#488). Layout mirrors the voxtype-bin AUR
+# package, which had it right.
+#
+# The voxtype-osd launcher probes its own parent directory, so it finds
+# voxtype-osd-gtk4 and voxtype-osd-quickshell in /usr/lib/voxtype without
+# them being on PATH. Only the launcher gets a /usr/bin symlink.
+install_companion_binary() {
+    local asset="$1"        # release-asset suffix, e.g. osd-gtk4
+    local dest="$2"         # absolute path under $STAGING
+    local src="${RELEASE_DIR}/voxtype-${VERSION}-linux-${TARGET_ARCH}-${asset}"
+    if [[ ! -f "$src" ]]; then
+        echo "  warning: ${src##*/} not found, skipping" >&2
+        return 0
+    fi
+    install -Dm755 "$src" "$dest"
+}
+install_companion_binary osd "$STAGING/usr/lib/voxtype/voxtype-osd"
+install_companion_binary osd-gtk4 "$STAGING/usr/lib/voxtype/voxtype-osd-gtk4"
+install_companion_binary osd-quickshell "$STAGING/usr/lib/voxtype/voxtype-osd-quickshell"
+if [[ -f "$STAGING/usr/lib/voxtype/voxtype-osd" ]]; then
+    ln -sf /usr/lib/voxtype/voxtype-osd "$STAGING/usr/bin/voxtype-osd"
+fi
+
+# voxtype-audio-bridge: NDJSON sidecar that streams audio levels over a
+# UNIX socket to the Quickshell OSD. Lives in /usr/bin because the
+# quickshell launcher exec's it directly by basename.
+install_companion_binary audio-bridge "$STAGING/usr/bin/voxtype-audio-bridge"
+
 cp config/default.toml "$STAGING/etc/voxtype/config.toml"
 cp packaging/systemd/voxtype.service "$STAGING/usr/lib/systemd/user/"
 cp README.md "$STAGING/usr/share/doc/voxtype/"
 cp LICENSE "$STAGING/usr/share/doc/voxtype/"
+
+# Quickshell QML tree. The voxtype-osd-quickshell launcher probes this
+# location after the user/runtime paths, so users can opt in via
+# [osd] frontend = "quickshell" without installing the QML files
+# themselves. Only checked-in tree files are copied (no .git, no dotfiles,
+# no editor temp files).
+if [[ -d quickshell ]]; then
+    mkdir -p "$STAGING/usr/share/voxtype/quickshell"
+    # Use tar with --exclude to mirror the existing copy style while
+    # filtering out repo cruft. Note: -C from the source dir keeps the
+    # tar paths relative.
+    tar -cf - \
+        --exclude='.git' \
+        --exclude='.gitignore' \
+        --exclude='.*.swp' \
+        --exclude='*~' \
+        --exclude='.DS_Store' \
+        -C quickshell . | tar -xf - -C "$STAGING/usr/share/voxtype/quickshell"
+    # Ensure world-readable; QML files don't need execute bits.
+    find "$STAGING/usr/share/voxtype/quickshell" -type f -exec chmod 644 {} \;
+    find "$STAGING/usr/share/voxtype/quickshell" -type d -exec chmod 755 {} \;
+fi
 
 # Shell completions (must be world-readable for non-root users)
 cp packaging/completions/voxtype.bash "$STAGING/usr/share/bash-completion/completions/voxtype"

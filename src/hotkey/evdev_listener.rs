@@ -110,9 +110,8 @@ impl EvdevListener {
     }
 }
 
-#[async_trait::async_trait]
 impl HotkeyListener for EvdevListener {
-    async fn start(&mut self) -> Result<mpsc::Receiver<HotkeyEvent>, HotkeyError> {
+    fn start(&mut self) -> Result<mpsc::Receiver<HotkeyEvent>, HotkeyError> {
         let (tx, rx) = mpsc::channel(32);
         let (stop_tx, stop_rx) = oneshot::channel();
         self.stop_signal = Some(stop_tx);
@@ -143,7 +142,7 @@ impl HotkeyListener for EvdevListener {
         Ok(rx)
     }
 
-    async fn stop(&mut self) -> Result<(), HotkeyError> {
+    fn stop(&mut self) -> Result<(), HotkeyError> {
         if let Some(stop) = self.stop_signal.take() {
             let _ = stop.send(());
         }
@@ -392,6 +391,7 @@ impl DeviceManager {
 }
 
 /// Main listener loop running in a blocking task
+#[allow(clippy::too_many_arguments)]
 fn evdev_listener_loop(
     target_key: Key,
     modifier_keys: HashSet<Key>,

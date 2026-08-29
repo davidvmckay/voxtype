@@ -62,7 +62,9 @@ pub fn create_vad(config: &Config) -> Result<Option<Box<dyn VoiceActivityDetecto
                 | TranscriptionEngine::SenseVoice
                 | TranscriptionEngine::Paraformer
                 | TranscriptionEngine::Dolphin
-                | TranscriptionEngine::Omnilingual => VadBackend::Energy,
+                | TranscriptionEngine::Omnilingual
+                | TranscriptionEngine::Cohere
+                | TranscriptionEngine::Soniox => VadBackend::Energy,
             }
         }
         explicit => explicit,

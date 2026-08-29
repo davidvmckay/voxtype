@@ -3,6 +3,8 @@
 //! Provides text output via keyboard simulation or clipboard.
 //!
 //! Fallback chain for `mode = "type"`:
+//!
+//! Linux:
 //! 1. wtype - Wayland-native via virtual-keyboard protocol, best Unicode/CJK support, no daemon needed
 //! 2. eitype - Wayland via libei/EI protocol, works on GNOME/KDE (no virtual-keyboard support)
 //! 3. dotool - Works on X11/Wayland/TTY, supports keyboard layouts, no daemon needed
@@ -10,16 +12,34 @@
 //! 5. clipboard (wl-copy) - Wayland clipboard fallback
 //! 6. xclip - X11 clipboard fallback
 //!
+//! macOS:
+//! 1. cgevent - Native CGEvent API for keyboard simulation (best performance)
+//! 2. osascript - AppleScript fallback
+//! 3. pbcopy - Native macOS clipboard
+//!
 //! Paste mode (clipboard + Ctrl+V) helps with system with non US keyboard layouts.
 
+#[cfg(target_os = "macos")]
+pub mod cgevent;
 pub mod clipboard;
 pub mod dotool;
 pub mod eitype;
+// modifier_guard is evdev-based; macOS has its own osascript modifier handling.
+#[cfg(target_os = "linux")]
+pub mod modifier_guard;
+#[cfg(target_os = "macos")]
+pub mod osascript;
 pub mod paste;
+#[cfg(target_os = "macos")]
+pub mod pbcopy;
 pub mod post_process;
+pub mod session;
+pub mod streaming;
 pub mod wtype;
 pub mod xclip;
 pub mod ydotool;
+
+pub use streaming::StreamingSession;
 
 use crate::config::{OutputConfig, OutputDriver};
 use crate::error::OutputError;
@@ -157,6 +177,18 @@ pub fn engine_icon(engine: crate::config::TranscriptionEngine) -> &'static str {
         crate::config::TranscriptionEngine::Paraformer => "\u{1F4AC}", // 💬
         crate::config::TranscriptionEngine::Dolphin => "\u{1F42C}",  // 🐬
         crate::config::TranscriptionEngine::Omnilingual => "\u{1F30D}", // 🌍
+        crate::config::TranscriptionEngine::Cohere => "\u{1F4DD}",   // 📝
+        crate::config::TranscriptionEngine::Soniox => "\u{2601}\u{FE0F}", // ☁️
+    }
+}
+
+/// Validate notification urgency, falling back to "normal" for unknown values.
+///
+/// notify-send only accepts "low", "normal", or "critical".
+pub fn sanitize_urgency(urgency: &str) -> &str {
+    match urgency {
+        "low" | "normal" | "critical" => urgency,
+        _ => "normal",
     }
 }
 
@@ -165,6 +197,7 @@ pub async fn send_transcription_notification(
     text: &str,
     show_engine_icon: bool,
     engine: crate::config::TranscriptionEngine,
+    urgency: &str,
 ) {
     // Truncate preview for notification (use chars() to handle multi-byte UTF-8)
     let preview = if text.chars().count() > 80 {
@@ -179,11 +212,18 @@ pub async fn send_transcription_notification(
         "Transcribed".to_string()
     };
 
+    let urgency_arg = format!("--urgency={}", sanitize_urgency(urgency));
+    // Synchronous + transient hints ([#345]): single Voxtype notification slot
+    // that the compositor overwrites in place, and no stacking in the history.
     let _ = Command::new("notify-send")
         .args([
             "--app-name=Voxtype",
-            "--urgency=low",
+            &urgency_arg,
             "--expire-time=3000",
+            "-h",
+            "string:x-canonical-private-synchronous:voxtype",
+            "-h",
+            "int:transient:1",
             &title,
             &preview,
         ])
@@ -207,6 +247,7 @@ pub trait TextOutput: Send + Sync {
 }
 
 /// Default driver order for type mode
+#[cfg(not(target_os = "macos"))]
 const DEFAULT_DRIVER_ORDER: &[OutputDriver] = &[
     OutputDriver::Wtype,
     OutputDriver::Eitype,
@@ -217,6 +258,7 @@ const DEFAULT_DRIVER_ORDER: &[OutputDriver] = &[
 ];
 
 /// Create a TextOutput implementation for a specific driver
+#[cfg(not(target_os = "macos"))]
 fn create_driver_output(
     driver: OutputDriver,
     config: &OutputConfig,
@@ -237,6 +279,8 @@ fn create_driver_output(
             config.type_delay_ms,
             pre_type_delay_ms,
             config.shift_enter_newlines,
+            config.eitype_xkb_layout.clone(),
+            config.eitype_xkb_variant.clone(),
         )),
         OutputDriver::Dotool => Box::new(dotool::DotoolOutput::new(
             config.type_delay_ms,
@@ -270,58 +314,88 @@ pub fn create_output_chain_with_override(
     driver_override: Option<&[OutputDriver]>,
 ) -> Vec<Box<dyn TextOutput>> {
     let mut chain: Vec<Box<dyn TextOutput>> = Vec::new();
+    #[cfg(target_os = "macos")]
+    let _ = driver_override;
 
     // Get effective pre_type_delay_ms (handles deprecated wtype_delay_ms)
     let pre_type_delay_ms = config.effective_pre_type_delay_ms();
 
     match config.mode {
         crate::config::OutputMode::Type => {
-            // Determine driver order: CLI override > config > default
-            let driver_order: &[OutputDriver] = driver_override
-                .or(config.driver_order.as_deref())
-                .unwrap_or(DEFAULT_DRIVER_ORDER);
+            #[cfg(target_os = "macos")]
+            {
+                // macOS: Primary - CGEvent (native API, best performance)
+                // driver_order not yet supported on macOS
+                let show_notification = config.notification.on_transcription;
+                chain.push(Box::new(cgevent::CGEventOutput::new(
+                    config.type_delay_ms,
+                    pre_type_delay_ms,
+                    show_notification,
+                    config.auto_submit,
+                )));
 
-            if let Some(custom_order) = driver_override.or(config.driver_order.as_deref()) {
-                tracing::info!(
-                    "Using custom driver order: {}",
-                    custom_order
-                        .iter()
-                        .map(|d| d.to_string())
-                        .collect::<Vec<_>>()
-                        .join(" -> ")
-                );
+                // Fallback 1: osascript (AppleScript, works without CGEvent permissions)
+                chain.push(Box::new(osascript::OsascriptOutput::new(
+                    false, // notification already handled by primary
+                    config.auto_submit,
+                    pre_type_delay_ms,
+                )));
+
+                // Fallback 2: pbcopy for clipboard
+                if config.fallback_to_clipboard {
+                    chain.push(Box::new(pbcopy::PbcopyOutput::new(false)));
+                }
             }
 
-            // Build chain based on driver order
-            for (i, driver) in driver_order.iter().enumerate() {
-                // Skip clipboard if it's in the middle and fallback_to_clipboard is false
-                // (clipboard should only be added if explicitly in the order OR fallback is enabled and it's last)
-                let is_last = i == driver_order.len() - 1;
-                if *driver == OutputDriver::Clipboard && !is_last && !config.fallback_to_clipboard {
-                    continue;
+            #[cfg(not(target_os = "macos"))]
+            {
+                // Determine driver order: CLI override > config > default
+                let driver_order: &[OutputDriver] = driver_override
+                    .or(config.driver_order.as_deref())
+                    .unwrap_or(DEFAULT_DRIVER_ORDER);
+
+                if let Some(custom_order) = driver_override.or(config.driver_order.as_deref()) {
+                    tracing::info!(
+                        "Using custom driver order: {}",
+                        custom_order
+                            .iter()
+                            .map(|d| d.to_string())
+                            .collect::<Vec<_>>()
+                            .join(" -> ")
+                    );
                 }
 
-                chain.push(create_driver_output(*driver, config, pre_type_delay_ms));
-            }
+                for driver in driver_order.iter() {
+                    chain.push(create_driver_output(*driver, config, pre_type_delay_ms));
+                }
 
-            // If fallback_to_clipboard is true but clipboard wasn't in the custom order, add it
-            if config.fallback_to_clipboard
-                && config.driver_order.is_some()
-                && !driver_order.contains(&OutputDriver::Clipboard)
-            {
-                chain.push(Box::new(clipboard::ClipboardOutput::new(
-                    config.append_text.clone(),
-                )));
+                // If fallback_to_clipboard is true but clipboard wasn't in the custom order, add it
+                if config.fallback_to_clipboard
+                    && config.driver_order.is_some()
+                    && !driver_order.contains(&OutputDriver::Clipboard)
+                {
+                    chain.push(Box::new(clipboard::ClipboardOutput::new(
+                        config.append_text.clone(),
+                    )));
+                }
             }
         }
         crate::config::OutputMode::Clipboard => {
-            // Clipboard with X11 fallback: wl-copy first, then xclip
-            chain.push(Box::new(clipboard::ClipboardOutput::new(
-                config.append_text.clone(),
+            #[cfg(target_os = "macos")]
+            chain.push(Box::new(pbcopy::PbcopyOutput::new(
+                config.notification.on_transcription,
             )));
-            chain.push(Box::new(xclip::XclipOutput::new(
-                config.append_text.clone(),
-            )));
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                // Clipboard with X11 fallback: wl-copy first, then xclip
+                chain.push(Box::new(clipboard::ClipboardOutput::new(
+                    config.append_text.clone(),
+                )));
+                chain.push(Box::new(xclip::XclipOutput::new(
+                    config.append_text.clone(),
+                )));
+            }
         }
         crate::config::OutputMode::Paste => {
             // Only paste mode (no fallback as requested)
@@ -376,6 +450,19 @@ pub async fn run_hook(command: &str, hook_name: &str) -> Result<(), String> {
 pub struct OutputOptions<'a> {
     pub pre_output_command: Option<&'a str>,
     pub post_output_command: Option<&'a str>,
+    /// Wait for modifier keys (Ctrl/Alt/Shift/Super) to be released before
+    /// invoking keystroke-synthesizing output methods.
+    pub wait_for_modifier_release: bool,
+    /// Maximum time to wait for modifier release before skipping keystroke
+    /// methods and falling through to clipboard-only methods.
+    pub modifier_release_timeout: std::time::Duration,
+}
+
+/// Output methods that synthesize keystrokes the compositor can interpret as
+/// keybindings when modifiers are held. Used to filter the chain when the
+/// modifier-release wait times out.
+fn is_keystroke_method(name: &str) -> bool {
+    matches!(name, "wtype" | "eitype" | "dotool" | "ydotool") || name.starts_with("paste")
 }
 
 /// Try each output method in the chain until one succeeds
@@ -388,6 +475,41 @@ pub async fn output_with_fallback(
     // Normalize curly quotes to ASCII to prevent line break issues with keyboard tools
     let normalized_text = normalize_quotes(text);
 
+    // If the modifier guard is enabled, snapshot kernel-level key state and
+    // wait for any held modifiers to be released. This prevents typed letters
+    // from combining with Super/Ctrl/Alt/Shift and firing compositor or
+    // application keybindings. Disabled and timed-out cases both leave the
+    // chain runnable; only the latter skips keystroke-synthesizing methods.
+    let mut skip_keystroke_methods = false;
+    // The evdev-based modifier_guard is Linux-only. macOS uses its own
+    // wait_for_modifiers_release in osascript.rs and gets called separately
+    // from the osascript output path.
+    #[cfg(target_os = "linux")]
+    if options.wait_for_modifier_release {
+        let mut guard = modifier_guard::ModifierGuard::new();
+        if guard
+            .wait_for_release(options.modifier_release_timeout)
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                timeout_ms = options.modifier_release_timeout.as_millis() as u64,
+                "Modifier keys still held after timeout; skipping \
+                 keystroke-synthesizing methods and using clipboard fallback \
+                 to avoid triggering keybindings"
+            );
+            // Surface the fallback to the user so they know where the
+            // transcription went. Silent clipboard fallback leaves users
+            // staring at an empty cursor wondering why nothing was typed.
+            crate::notification::send(
+                "Voxtype",
+                "Modifier key held too long, transcription copied to clipboard.",
+            )
+            .await;
+            skip_keystroke_methods = true;
+        }
+    }
+
     // Run pre-output hook if configured (e.g., switch to modifier-suppressing submap)
     if let Some(cmd) = options.pre_output_command {
         if let Err(e) = run_hook(cmd, "pre_output").await {
@@ -399,6 +521,14 @@ pub async fn output_with_fallback(
     // Try each output method
     let mut result = Err(OutputError::AllMethodsFailed);
     for output in chain {
+        if skip_keystroke_methods && is_keystroke_method(output.name()) {
+            tracing::debug!(
+                "{} skipped (modifier still held), trying next",
+                output.name()
+            );
+            continue;
+        }
+
         if !output.is_available().await {
             tracing::debug!("{} not available, trying next", output.name());
             continue;
@@ -484,6 +614,17 @@ mod tests {
     }
 
     #[test]
+    fn test_is_keystroke_method_classification() {
+        assert!(is_keystroke_method("wtype"));
+        assert!(is_keystroke_method("eitype"));
+        assert!(is_keystroke_method("dotool"));
+        assert!(is_keystroke_method("ydotool"));
+        assert!(is_keystroke_method("paste (clipboard + keystroke)"));
+        assert!(!is_keystroke_method("clipboard (wl-copy)"));
+        assert!(!is_keystroke_method("clipboard (xclip/xsel)"));
+    }
+
+    #[test]
     fn test_find_ydotool_socket_returns_none_when_no_socket() {
         // In a test environment there should be no ydotoold running, so this
         // should return None (no socket file exists at any candidate path).
@@ -509,5 +650,20 @@ mod tests {
         std::env::remove_var("YDOTOOL_SOCKET");
 
         assert_eq!(result, Some(sock_path));
+    }
+
+    #[test]
+    fn test_sanitize_urgency_valid() {
+        assert_eq!(sanitize_urgency("low"), "low");
+        assert_eq!(sanitize_urgency("normal"), "normal");
+        assert_eq!(sanitize_urgency("critical"), "critical");
+    }
+
+    #[test]
+    fn test_sanitize_urgency_invalid_falls_back_to_normal() {
+        assert_eq!(sanitize_urgency(""), "normal");
+        assert_eq!(sanitize_urgency("LOW"), "normal");
+        assert_eq!(sanitize_urgency("urgent"), "normal");
+        assert_eq!(sanitize_urgency("--rm -rf /"), "normal");
     }
 }

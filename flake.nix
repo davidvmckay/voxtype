@@ -55,6 +55,7 @@
           "paraformer"
           "dolphin"
           "omnilingual"
+          "cohere"
         ];
 
         onnxCudaFeatures = [
@@ -65,12 +66,13 @@
           "paraformer-cuda"
           "dolphin-cuda"
           "omnilingual-cuda"
+          "cohere-cuda"
         ];
 
-        # Only Parakeet has ROCm support; other engines run on CPU
-        onnxRocmFeatures = [
+        # Only Parakeet has AMD GPU support (via MIGraphX); other engines run on CPU
+        onnxMigraphxFeatures = [
           "parakeet-load-dynamic"
-          "parakeet-rocm"
+          "parakeet-migraphx"
           "moonshine"
           "sensevoice"
           "paraformer"
@@ -93,7 +95,7 @@
         # Wrap an ONNX package with runtime dependencies and ORT_DYLIB_PATH
         # ONNX engines need ONNX Runtime at runtime for inference
         libExt = if pkgs.stdenv.isDarwin then "dylib" else "so";
-        wrapOnnx = { onnxruntime ? pkgs.onnxruntime, pkg }: pkgs.symlinkJoin {
+        wrapOnnx = { onnxruntime ? pkgs.onnxruntime, pkg, extraWrapperArgs ? "" }: pkgs.symlinkJoin {
           name = "${pkg.pname or "voxtype"}-wrapped-${pkg.version}";
           paths = [ pkg ];
           buildInputs = [ pkgs.makeWrapper ];
@@ -101,14 +103,25 @@
             wrapProgram $out/bin/voxtype \
               --prefix PATH : ${pkgs.lib.makeBinPath runtimeDeps} \
               --set ORT_DYLIB_PATH "${onnxruntime}/lib/libonnxruntime.${libExt}" \
-              --prefix LD_LIBRARY_PATH : "${onnxruntime}/lib"
+              --prefix LD_LIBRARY_PATH : "${onnxruntime}/lib" \
+              ${extraWrapperArgs}
           '';
           inherit (pkg) meta;
         };
 
+        # Extra wrapper args for MIGraphX (ROCm) to set cache directory
+        migraphxWrapperArgs = ''
+          --run '
+            : "''${ORT_MIGRAPHX_MODEL_CACHE_PATH:=''${XDG_CACHE_HOME:-$HOME/.cache}/voxtype/migraphx}"
+            export ORT_MIGRAPHX_MODEL_CACHE_PATH
+            mkdir -p "$ORT_MIGRAPHX_MODEL_CACHE_PATH"
+          '
+        '';
+
         # ONNX Runtime variants for different GPU backends
         onnxruntimeCuda = pkgsUnfree.onnxruntime.override { cudaSupport = true; };
         onnxruntimeRocm = pkgs.onnxruntime.override { rocmSupport = true; };
+
 
         # Base derivation for voxtype (unwrapped)
         mkVoxtypeUnwrapped = { pname ? "voxtype", features ? [], extraNativeBuildInputs ? [], extraBuildInputs ? [] }:
@@ -253,12 +266,12 @@
           ORT_LIB_LOCATION = "${onnxruntimeCuda}/lib";
         });
 
-        # Build the ONNX + ROCm variant for AMD GPUs
-        # Only Parakeet gets ROCm acceleration; other engines run on CPU
-        onnxRocmUnwrapped = let
+        # Build the ONNX + MIGraphX variant for AMD GPUs
+        # Only Parakeet gets AMD GPU acceleration; other engines run on CPU
+        onnxMigraphxUnwrapped = let
           pkg = mkVoxtypeUnwrapped {
-            pname = "voxtype-onnx-rocm";
-            features = onnxRocmFeatures;
+            pname = "voxtype-onnx-migraphx";
+            features = onnxMigraphxFeatures;
             extraNativeBuildInputs = with pkgs; [
               rocmPackages.clr
             ];
@@ -272,6 +285,74 @@
           ORT_LIB_LOCATION = "${onnxruntimeRocm}/lib";
         });
 
+        # OSD frontend packages. The launcher binary (`voxtype-osd`) ships
+        # with every main voxtype package, these provide the GUI frontend
+        # the launcher execs into.
+        osdNative = pkgs.rustPlatform.buildRustPackage {
+          pname = "voxtype-osd-native";
+          version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
+
+          src = ./.;
+          cargoLock.lockFile = ./Cargo.lock;
+
+          nativeBuildInputs = commonNativeBuildInputs ++ [ pkgs.makeWrapper ];
+          buildInputs = commonBuildInputs ++ [ pkgs.libxkbcommon ];
+
+          LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+
+          buildFeatures = [ "osd-native" ];
+          cargoBuildFlags = [ "--bin" "voxtype-osd-native" ];
+
+          # Skip running the full lib test suite, this package only ships the OSD bin.
+          doCheck = false;
+
+          # wgpu dlopens libvulkan / libwayland-client at runtime.
+          postFixup = ''
+            wrapProgram $out/bin/voxtype-osd-native \
+              --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath (with pkgs; [
+                vulkan-loader
+                wayland
+              ])}"
+          '';
+
+          meta = with pkgs.lib; {
+            description = "Native (Wayland + wgpu + egui) on-screen display frontend for voxtype";
+            homepage = "https://voxtype.io";
+            license = licenses.mit;
+            maintainers = [];
+            platforms = [ "x86_64-linux" "aarch64-linux" ];
+            mainProgram = "voxtype-osd-native";
+          };
+        };
+
+        osdGtk4 = pkgs.rustPlatform.buildRustPackage {
+          pname = "voxtype-osd-gtk4";
+          version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
+
+          src = ./.;
+          cargoLock.lockFile = ./Cargo.lock;
+
+          nativeBuildInputs = commonNativeBuildInputs ++ [ pkgs.wrapGAppsHook4 ];
+          buildInputs = commonBuildInputs ++ [ pkgs.gtk4-layer-shell ];
+
+          LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+
+          buildFeatures = [ "osd-gtk4" ];
+          cargoBuildFlags = [ "--bin" "voxtype-osd-gtk4" ];
+
+          # Skip running the full lib test suite, this package only ships the OSD bin.
+          doCheck = false;
+
+          meta = with pkgs.lib; {
+            description = "GTK4 on-screen display frontend for voxtype";
+            homepage = "https://voxtype.io";
+            license = licenses.mit;
+            maintainers = [];
+            platforms = [ "x86_64-linux" "aarch64-linux" ];
+            mainProgram = "voxtype-osd-gtk4";
+          };
+        };
+
       in {
         packages = {
           # Wrapped packages (ready to use, runtime deps in PATH)
@@ -284,12 +365,19 @@
           # Paraformer, Dolphin, Omnilingual)
           onnx = wrapOnnx { pkg = onnxUnwrapped; };
           onnx-cuda = wrapOnnx { onnxruntime = onnxruntimeCuda; pkg = onnxCudaUnwrapped; };
-          onnx-rocm = wrapOnnx { onnxruntime = onnxruntimeRocm; pkg = onnxRocmUnwrapped; };
+          onnx-migraphx = wrapOnnx { onnxruntime = onnxruntimeRocm; pkg = onnxMigraphxUnwrapped; extraWrapperArgs = migraphxWrapperArgs; };
 
-          # Backwards-compatible aliases (parakeet → onnx)
+          # Backwards-compatible aliases (parakeet → onnx, rocm → migraphx)
           parakeet = wrapOnnx { pkg = onnxUnwrapped; };
           parakeet-cuda = wrapOnnx { onnxruntime = onnxruntimeCuda; pkg = onnxCudaUnwrapped; };
-          parakeet-rocm = wrapOnnx { onnxruntime = onnxruntimeRocm; pkg = onnxRocmUnwrapped; };
+          parakeet-migraphx = wrapOnnx { onnxruntime = onnxruntimeRocm; pkg = onnxMigraphxUnwrapped; extraWrapperArgs = migraphxWrapperArgs; };
+          # Legacy: rocm → migraphx (drop in v0.8.0)
+          onnx-rocm = wrapOnnx { onnxruntime = onnxruntimeRocm; pkg = onnxMigraphxUnwrapped; extraWrapperArgs = migraphxWrapperArgs; };
+          parakeet-rocm = wrapOnnx { onnxruntime = onnxruntimeRocm; pkg = onnxMigraphxUnwrapped; extraWrapperArgs = migraphxWrapperArgs; };
+
+          # OSD frontends (installable alongside any voxtype package)
+          osd-native = osdNative;
+          osd-gtk4 = osdGtk4;
 
           # Unwrapped packages (for custom wrapping scenarios)
           voxtype-unwrapped = mkVoxtypeUnwrapped {};
@@ -297,12 +385,15 @@
           voxtype-rocm-unwrapped = rocmUnwrapped;
           voxtype-onnx-unwrapped = onnxUnwrapped;
           voxtype-onnx-cuda-unwrapped = onnxCudaUnwrapped;
-          voxtype-onnx-rocm-unwrapped = onnxRocmUnwrapped;
+          voxtype-onnx-migraphx-unwrapped = onnxMigraphxUnwrapped;
 
           # Backwards-compatible aliases
           voxtype-parakeet-unwrapped = onnxUnwrapped;
           voxtype-parakeet-cuda-unwrapped = onnxCudaUnwrapped;
-          voxtype-parakeet-rocm-unwrapped = onnxRocmUnwrapped;
+          voxtype-parakeet-migraphx-unwrapped = onnxMigraphxUnwrapped;
+          # Legacy
+          voxtype-onnx-rocm-unwrapped = onnxMigraphxUnwrapped;
+          voxtype-parakeet-rocm-unwrapped = onnxMigraphxUnwrapped;
         };
 
         # Development shell with all dependencies
